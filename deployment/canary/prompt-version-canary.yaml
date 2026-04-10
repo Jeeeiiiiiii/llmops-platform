@@ -1,0 +1,142 @@
+###############################################################################
+# Istio VirtualService — Prompt Version Canary Routing
+#
+# Enables A/B testing of prompt template versions by routing traffic to
+# different gateway deployments based on:
+#   1. Header-based routing: clients with x-prompt-version: "v2" are
+#      routed to the canary gateway deployment.
+#   2. Weight-based split: a configurable percentage (default 90/10) of
+#      traffic without the header is split between stable and canary.
+#
+# Prerequisites:
+#   - Istio sidecar injection enabled in the llmops namespace
+#   - Two gateway Deployments: llm-gateway-stable and llm-gateway-canary
+#   - Corresponding Kubernetes Services for each
+#   - A DestinationRule defining subsets "stable" and "canary"
+#
+# Usage:
+#   kubectl apply -f deployment/canary/prompt-version-canary.yaml -n llmops
+#
+# To adjust the canary weight, edit the weight fields and re-apply.
+# For a full rollout, set stable weight to 0 and canary to 100.
+###############################################################################
+
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: llm-gateway-destinations
+  namespace: llmops
+  labels:
+    app.kubernetes.io/name: llm-gateway
+    app.kubernetes.io/component: canary
+    app.kubernetes.io/part-of: llmops-platform
+spec:
+  host: llm-gateway.llmops.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 200
+      http:
+        h2UpgradePolicy: DEFAULT
+        maxRequestsPerConnection: 100
+    outlierDetection:
+      consecutive5xxErrors: 3
+      interval: 30s
+      baseEjectionTime: 60s
+      maxEjectionPercent: 50
+  subsets:
+    - name: stable
+      labels:
+        prompt-version: "v1"
+    - name: canary
+      labels:
+        prompt-version: "v2"
+
+---
+
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: llm-gateway-canary
+  namespace: llmops
+  labels:
+    app.kubernetes.io/name: llm-gateway
+    app.kubernetes.io/component: canary
+    app.kubernetes.io/part-of: llmops-platform
+  annotations:
+    # Track which prompt template versions are being tested
+    llmops.company.com/stable-prompt-version: "v1"
+    llmops.company.com/canary-prompt-version: "v2"
+    llmops.company.com/canary-started: "2026-03-26T00:00:00Z"
+spec:
+  hosts:
+    - llm-gateway.llmops.svc.cluster.local
+    # External hostname (if exposed via Istio ingress gateway)
+    - llm-gateway.company.com
+  gateways:
+    - mesh                           # In-cluster traffic
+    - llmops/llm-gateway-ingress     # External ingress gateway
+  http:
+    # -----------------------------------------------------------------
+    # Rule 1: Header-based routing for explicit canary testing
+    # -----------------------------------------------------------------
+    # Clients that send x-prompt-version: "v2" are always routed to the
+    # canary deployment, regardless of weight-based split. This allows
+    # QA teams and eval pipelines to test the new prompt version directly.
+    - name: header-based-canary
+      match:
+        - headers:
+            x-prompt-version:
+              exact: "v2"
+      route:
+        - destination:
+            host: llm-gateway.llmops.svc.cluster.local
+            subset: canary
+            port:
+              number: 8080
+          weight: 100
+      # Add response headers to identify which version served the request
+      headers:
+        response:
+          set:
+            x-served-by: "canary-v2"
+            x-prompt-version: "v2"
+
+    # -----------------------------------------------------------------
+    # Rule 2: Weight-based split for gradual rollout
+    # -----------------------------------------------------------------
+    # Default route for all other traffic. Splits between stable and
+    # canary based on configured weights. Start at 90/10, then
+    # progressively increase canary weight as confidence grows:
+    #   90/10 -> 75/25 -> 50/50 -> 25/75 -> 0/100 (full rollout)
+    - name: weighted-rollout
+      route:
+        - destination:
+            host: llm-gateway.llmops.svc.cluster.local
+            subset: stable
+            port:
+              number: 8080
+          weight: 90
+          headers:
+            response:
+              set:
+                x-served-by: "stable-v1"
+                x-prompt-version: "v1"
+        - destination:
+            host: llm-gateway.llmops.svc.cluster.local
+            subset: canary
+            port:
+              number: 8080
+          weight: 10
+          headers:
+            response:
+              set:
+                x-served-by: "canary-v2"
+                x-prompt-version: "v2"
+      # Retry policy for failed requests
+      retries:
+        attempts: 2
+        perTryTimeout: 30s
+        retryOn: "5xx,reset,connect-failure"
+      # Request timeout
+      timeout: 120s

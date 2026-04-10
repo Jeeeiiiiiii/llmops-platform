@@ -1,0 +1,174 @@
+###############################################################################
+# vLLM Helm Chart — Default Values
+###############################################################################
+
+replicaCount: 1
+
+image:
+  repository: vllm/vllm-openai
+  tag: "v0.4.1"
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# ---------------------------------------------------------------------------
+# vLLM Engine Configuration
+# ---------------------------------------------------------------------------
+model:
+  name: "meta-llama/Llama-3-8B"
+  # HuggingFace token for gated models (reference a K8s secret)
+  hfTokenSecret: "hf-token"
+  hfTokenKey: "token"
+
+engine:
+  tensorParallelSize: 2
+  maxModelLen: 8192
+  gpuMemoryUtilization: 0.90
+  # Quantization: null, "awq", "gptq", "squeezellm"
+  quantization: null
+  dtype: "auto"
+  # Maximum number of batched sequences
+  maxNumBatchedTokens: 32768
+  maxNumSeqs: 256
+  # Enforce eager mode (disable CUDA graphs) for debugging
+  enforceEager: false
+  # Trust remote code from HuggingFace model repos
+  trustRemoteCode: false
+
+# ---------------------------------------------------------------------------
+# Resources — GPU scheduling
+# ---------------------------------------------------------------------------
+resources:
+  requests:
+    cpu: "4"
+    memory: "32Gi"
+    nvidia.com/gpu: "2"
+  limits:
+    cpu: "8"
+    memory: "64Gi"
+    nvidia.com/gpu: "2"
+
+# ---------------------------------------------------------------------------
+# Model weight storage — PVC backed by Azure Blob or NFS
+# ---------------------------------------------------------------------------
+modelStorage:
+  enabled: true
+  storageClass: "azurefile-premium"
+  accessMode: ReadWriteMany
+  size: "100Gi"
+  mountPath: "/models"
+
+# ---------------------------------------------------------------------------
+# Probes
+# ---------------------------------------------------------------------------
+livenessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 120
+  periodSeconds: 30
+  timeoutSeconds: 10
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 60
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+startupProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 30  # Allow up to 5 min for model loading
+
+# ---------------------------------------------------------------------------
+# Service
+# ---------------------------------------------------------------------------
+service:
+  type: ClusterIP
+  port: 8000
+  annotations: {}
+
+# ---------------------------------------------------------------------------
+# Horizontal Pod Autoscaler
+# ---------------------------------------------------------------------------
+autoscaling:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 4
+  metrics:
+    # GPU utilisation (requires DCGM exporter + Prometheus adapter)
+    gpuUtilization:
+      enabled: true
+      targetValue: 75
+    # vLLM internal queue depth (custom metric)
+    queueDepth:
+      enabled: true
+      targetValue: 10
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 120
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 300
+
+# ---------------------------------------------------------------------------
+# Tolerations & Affinity — schedule on GPU nodes
+# ---------------------------------------------------------------------------
+tolerations:
+  - key: "nvidia.com/gpu"
+    operator: "Exists"
+    effect: "NoSchedule"
+
+nodeSelector:
+  accelerator: nvidia-gpu
+
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values:
+                  - vllm
+          topologyKey: kubernetes.io/hostname
+
+# ---------------------------------------------------------------------------
+# Pod-level settings
+# ---------------------------------------------------------------------------
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "8000"
+  prometheus.io/path: "/metrics"
+
+podSecurityContext:
+  fsGroup: 1000
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  allowPrivilegeEscalation: false
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}

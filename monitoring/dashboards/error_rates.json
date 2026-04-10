@@ -1,0 +1,328 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_PROMETHEUS",
+      "label": "Prometheus",
+      "description": "Prometheus datasource for LLMOps metrics",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ],
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": "-- Grafana --",
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "Error rates and infrastructure health: errors by type, rate limit hits, GPU memory, failed requests, and KV cache utilization.",
+  "editable": true,
+  "gnetId": null,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "title": "Error Rate by Type",
+      "description": "Breakdown of request errors by category: timeout, OOM, guardrail block, rate_limit, and vllm_error.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "id": 1,
+      "datasource": "${DS_PROMETHEUS}",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 30,
+            "gradientMode": "scheme",
+            "showPoints": "never",
+            "stacking": { "mode": "normal", "group": "A" },
+            "axisLabel": "Errors / min"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "timeout" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#e0b400", "mode": "fixed" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "OOM" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#f2495c", "mode": "fixed" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "guardrail" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#ff9830", "mode": "fixed" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "rate_limit" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#8ab8ff", "mode": "fixed" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "vllm_error" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#c4162a", "mode": "fixed" } }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "expr": "sum by (error_type) (rate(request_errors_total{namespace=\"llmops\"}[5m])) * 60",
+          "legendFormat": "{{error_type}}",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum", "mean", "max", "lastNotNull"] },
+        "tooltip": { "mode": "multi" }
+      }
+    },
+    {
+      "title": "Rate Limit Hits Per API Key",
+      "description": "Table showing which API keys are hitting rate limits most frequently in the last 24 hours.",
+      "type": "table",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "id": 2,
+      "datasource": "${DS_PROMETHEUS}",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "align": "auto", "filterable": true }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "API Key" },
+            "properties": [
+              { "id": "custom.width", "value": 200 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Rate Limit Hits (24h)" },
+            "properties": [
+              { "id": "custom.width", "value": 160 },
+              { "id": "thresholds", "value": {
+                "mode": "absolute",
+                "steps": [
+                  { "value": null, "color": "green" },
+                  { "value": 50, "color": "yellow" },
+                  { "value": 200, "color": "red" }
+                ]
+              }},
+              { "id": "custom.displayMode", "value": "color-background" }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Total Requests (24h)" },
+            "properties": [
+              { "id": "custom.width", "value": 160 }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "expr": "sum by (api_key) (increase(request_errors_total{namespace=\"llmops\", error_type=\"rate_limit\"}[24h]))",
+          "legendFormat": "{{api_key}}",
+          "refId": "A",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "expr": "sum by (api_key) (increase(chat_latency_seconds_count{namespace=\"llmops\"}[24h]))",
+          "legendFormat": "{{api_key}}",
+          "refId": "B",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "api_key": "API Key",
+              "Value #A": "Rate Limit Hits (24h)",
+              "Value #B": "Total Requests (24h)"
+            }
+          }
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "desc": true, "displayName": "Rate Limit Hits (24h)" }]
+      }
+    },
+    {
+      "title": "GPU Memory Utilization",
+      "description": "GPU memory usage per device as reported by the DCGM exporter. Near-100% indicates risk of OOM errors.",
+      "type": "gauge",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 8 },
+      "id": 3,
+      "datasource": "${DS_PROMETHEUS}",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "value": null, "color": "green" },
+              { "value": 0.75, "color": "yellow" },
+              { "value": 0.90, "color": "orange" },
+              { "value": 0.95, "color": "red" }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "DCGM_FI_DEV_FB_USED{namespace=\"llmops\"} / DCGM_FI_DEV_FB_FREE{namespace=\"llmops\"}",
+          "legendFormat": "GPU {{gpu}} ({{pod}})",
+          "refId": "A"
+        },
+        {
+          "expr": "avg(DCGM_FI_DEV_MEM_COPY_UTIL{namespace=\"llmops\"}) / 100",
+          "legendFormat": "Avg GPU Mem Util",
+          "refId": "B"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "showThresholdLabels": true,
+        "showThresholdMarkers": true,
+        "orientation": "horizontal"
+      }
+    },
+    {
+      "title": "Failed Requests Timeline",
+      "description": "Time series of failed requests, helping identify incident windows and correlate with deployments.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 8 },
+      "id": 4,
+      "datasource": "${DS_PROMETHEUS}",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "fixedColor": "#f2495c", "mode": "fixed" },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 30,
+            "gradientMode": "opacity",
+            "showPoints": "auto",
+            "drawStyle": "bars",
+            "barAlignment": 0,
+            "axisLabel": "Failed requests"
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(request_errors_total{namespace=\"llmops\"}[5m]))",
+          "legendFormat": "Failed requests (5m)",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(increase(guardrail_blocks_total{namespace=\"llmops\"}[5m]))",
+          "legendFormat": "Guardrail blocks (5m)",
+          "refId": "B"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum", "max"] },
+        "tooltip": { "mode": "multi" }
+      }
+    },
+    {
+      "title": "vLLM KV Cache Utilization",
+      "description": "Percentage of the GPU KV cache currently in use. When this approaches 100%, new requests will queue or be rejected.",
+      "type": "gauge",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 8 },
+      "id": 5,
+      "datasource": "${DS_PROMETHEUS}",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "value": null, "color": "green" },
+              { "value": 0.70, "color": "yellow" },
+              { "value": 0.85, "color": "orange" },
+              { "value": 0.95, "color": "red" }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "vllm_gpu_cache_usage_perc{namespace=\"llmops\"}",
+          "legendFormat": "GPU KV cache ({{pod}})",
+          "refId": "A"
+        },
+        {
+          "expr": "vllm_cpu_cache_usage_perc{namespace=\"llmops\"}",
+          "legendFormat": "CPU swap cache ({{pod}})",
+          "refId": "B"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "showThresholdLabels": true,
+        "showThresholdMarkers": true,
+        "orientation": "vertical"
+      }
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["llmops", "errors", "gpu", "infrastructure"],
+  "templating": {
+    "list": [
+      {
+        "current": { "selected": false, "text": "llmops", "value": "llmops" },
+        "hide": 0,
+        "label": "Namespace",
+        "name": "namespace",
+        "options": [],
+        "query": "label_values(request_errors_total, namespace)",
+        "refresh": 2,
+        "type": "query"
+      }
+    ]
+  },
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "LLMOps - Error Rates & Infrastructure",
+  "uid": "llmops-errors",
+  "version": 1
+}

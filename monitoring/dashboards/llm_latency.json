@@ -1,0 +1,313 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_PROMETHEUS",
+      "label": "Prometheus",
+      "description": "Prometheus datasource for LLMOps metrics",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ],
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": "-- Grafana --",
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "LLM inference latency metrics: TTFT, total generation time, RPS, queue depth, and throughput.",
+  "editable": true,
+  "gnetId": null,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "title": "Time to First Token (TTFT) — p50 / p95 / p99",
+      "description": "Time from request receipt to the first token streamed back. High TTFT indicates prefill bottleneck or GPU saturation.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "id": 1,
+      "datasource": "${DS_PROMETHEUS}",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "scheme",
+            "showPoints": "never",
+            "axisLabel": "Latency (ms)"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "value": null, "color": "green" },
+              { "value": 300, "color": "yellow" },
+              { "value": 500, "color": "red" }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(vllm_time_to_first_token_seconds_bucket{namespace=\"llmops\"}[5m])) by (le)) * 1000",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(vllm_time_to_first_token_seconds_bucket{namespace=\"llmops\"}[5m])) by (le)) * 1000",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(vllm_time_to_first_token_seconds_bucket{namespace=\"llmops\"}[5m])) by (le)) * 1000",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max", "lastNotNull"] },
+        "tooltip": { "mode": "multi" }
+      }
+    },
+    {
+      "title": "Total Generation Time — p50 / p95 / p99",
+      "description": "End-to-end time from request to final token, including prefill and decode phases.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "id": 2,
+      "datasource": "${DS_PROMETHEUS}",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "scheme",
+            "showPoints": "never",
+            "axisLabel": "Latency (s)"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "value": null, "color": "green" },
+              { "value": 3, "color": "yellow" },
+              { "value": 5, "color": "red" }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(chat_latency_seconds_bucket{namespace=\"llmops\"}[5m])) by (le))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(chat_latency_seconds_bucket{namespace=\"llmops\"}[5m])) by (le))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(chat_latency_seconds_bucket{namespace=\"llmops\"}[5m])) by (le))",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max", "lastNotNull"] },
+        "tooltip": { "mode": "multi" }
+      }
+    },
+    {
+      "title": "Requests Per Second",
+      "description": "Incoming request rate to the LLM gateway. Combines stat (current) and time series (trend).",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 8 },
+      "id": 3,
+      "datasource": "${DS_PROMETHEUS}",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "value": null, "color": "blue" },
+              { "value": 50, "color": "green" },
+              { "value": 200, "color": "yellow" },
+              { "value": 500, "color": "red" }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(chat_latency_seconds_count{namespace=\"llmops\"}[1m]))",
+          "legendFormat": "RPS",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "" },
+        "graphMode": "area",
+        "colorMode": "background",
+        "textMode": "value_and_name"
+      }
+    },
+    {
+      "title": "Requests Per Second (Trend)",
+      "description": "Request rate over time, useful for spotting traffic patterns and spikes.",
+      "type": "timeseries",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 8 },
+      "id": 4,
+      "datasource": "${DS_PROMETHEUS}",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "color": { "fixedColor": "blue", "mode": "fixed" },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "gradientMode": "scheme",
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(chat_latency_seconds_count{namespace=\"llmops\"}[5m]))",
+          "legendFormat": "RPS",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "single" }
+      }
+    },
+    {
+      "title": "Queue Depth / Pending Requests",
+      "description": "Number of requests waiting in the vLLM scheduler queue. Sustained high values indicate capacity issues.",
+      "type": "gauge",
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 8 },
+      "id": 5,
+      "datasource": "${DS_PROMETHEUS}",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "max": 100,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "value": null, "color": "green" },
+              { "value": 20, "color": "yellow" },
+              { "value": 50, "color": "orange" },
+              { "value": 80, "color": "red" }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(vllm_num_requests_waiting{namespace=\"llmops\"})",
+          "legendFormat": "Pending",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(active_requests{namespace=\"llmops\"})",
+          "legendFormat": "Active (gateway)",
+          "refId": "B"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "showThresholdLabels": true,
+        "showThresholdMarkers": true
+      }
+    },
+    {
+      "title": "Tokens Per Second Throughput",
+      "description": "Output token generation throughput across all vLLM replicas. Key indicator of GPU compute efficiency.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 8 },
+      "id": 6,
+      "datasource": "${DS_PROMETHEUS}",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 15,
+            "gradientMode": "scheme",
+            "showPoints": "never",
+            "axisLabel": "Tokens/s"
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(vllm_generation_tokens_total{namespace=\"llmops\"}[5m]))",
+          "legendFormat": "Output tokens/s",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(vllm_prompt_tokens_total{namespace=\"llmops\"}[5m]))",
+          "legendFormat": "Input tokens/s",
+          "refId": "B"
+        },
+        {
+          "expr": "sum(rate(token_usage_total{namespace=\"llmops\", direction=\"output\"}[5m]))",
+          "legendFormat": "Output tokens/s (gateway)",
+          "refId": "C"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] },
+        "tooltip": { "mode": "multi" }
+      }
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["llmops", "latency", "inference", "vllm"],
+  "templating": {
+    "list": [
+      {
+        "current": { "selected": false, "text": "llmops", "value": "llmops" },
+        "hide": 0,
+        "label": "Namespace",
+        "name": "namespace",
+        "options": [],
+        "query": "label_values(chat_latency_seconds_count, namespace)",
+        "refresh": 2,
+        "type": "query"
+      }
+    ]
+  },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "LLMOps - LLM Latency",
+  "uid": "llmops-latency",
+  "version": 1
+}

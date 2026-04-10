@@ -1,0 +1,113 @@
+###############################################################################
+# Qdrant Vector DB — Default Values
+###############################################################################
+
+replicaCount: 1
+
+image:
+  repository: qdrant/qdrant
+  tag: "v1.8.4"
+  pullPolicy: IfNotPresent
+
+nameOverride: ""
+fullnameOverride: ""
+
+# ---------------------------------------------------------------------------
+# Qdrant Configuration
+# ---------------------------------------------------------------------------
+config:
+  # Storage engine
+  storage:
+    storageDir: "/qdrant/storage"
+    snapshotsDir: "/qdrant/snapshots"
+    # Optimiser settings for production
+    optimizers:
+      defaultSegmentNumber: 4
+      maxSegmentSize: 200000
+      memmapThreshold: 50000
+      indexingThreshold: 20000
+      flushIntervalSec: 5
+  # gRPC and REST service settings
+  service:
+    httpPort: 6333
+    grpcPort: 6334
+    enableTls: false
+  # Collection defaults
+  collection:
+    vectorsCount: 0
+    onDiskPayload: true
+
+# ---------------------------------------------------------------------------
+# Persistence
+# ---------------------------------------------------------------------------
+persistence:
+  enabled: true
+  storageClass: "managed-premium"
+  accessMode: ReadWriteOnce
+  size: "50Gi"
+
+# ---------------------------------------------------------------------------
+# Service
+# ---------------------------------------------------------------------------
+service:
+  type: ClusterIP
+  httpPort: 6333
+  grpcPort: 6334
+  annotations: {}
+
+# ---------------------------------------------------------------------------
+# Resources
+# ---------------------------------------------------------------------------
+resources:
+  requests:
+    cpu: "1"
+    memory: "4Gi"
+  limits:
+    cpu: "4"
+    memory: "8Gi"
+
+# ---------------------------------------------------------------------------
+# Probes
+# ---------------------------------------------------------------------------
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 15
+  periodSeconds: 15
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /readyz
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+# ---------------------------------------------------------------------------
+# Pod settings
+# ---------------------------------------------------------------------------
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "6333"
+  prometheus.io/path: "/metrics"
+
+podSecurityContext:
+  fsGroup: 1000
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  allowPrivilegeEscalation: false
+
+tolerations: []
+nodeSelector: {}
+affinity: {}
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}

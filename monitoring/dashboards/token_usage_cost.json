@@ -1,0 +1,384 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_PROMETHEUS",
+      "label": "Prometheus",
+      "description": "Prometheus datasource for LLMOps metrics",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ],
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": "-- Grafana --",
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "Token usage and cost tracking: daily token counts, estimated costs, per-key usage, budget thresholds, and cumulative spend.",
+  "editable": true,
+  "gnetId": null,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "title": "Daily Input + Output Token Count",
+      "description": "Stacked bar chart of input (prompt) and output (completion) tokens consumed per day.",
+      "type": "barchart",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "id": 1,
+      "datasource": "${DS_PROMETHEUS}",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "stacking": { "mode": "normal", "group": "A" },
+            "fillOpacity": 80,
+            "gradientMode": "scheme",
+            "barAlignment": 0,
+            "barWidthFactor": 0.8
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Input tokens" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#7eb26d", "mode": "fixed" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Output tokens" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#eab839", "mode": "fixed" } }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(token_usage_total{namespace=\"llmops\", direction=\"input\"}[1d]))",
+          "legendFormat": "Input tokens",
+          "refId": "A",
+          "interval": "1d"
+        },
+        {
+          "expr": "sum(increase(token_usage_total{namespace=\"llmops\", direction=\"output\"}[1d]))",
+          "legendFormat": "Output tokens",
+          "refId": "B",
+          "interval": "1d"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum", "lastNotNull"] },
+        "tooltip": { "mode": "multi" }
+      }
+    },
+    {
+      "title": "Estimated Daily Cost (USD)",
+      "description": "Estimated daily cost based on configurable per-token rates. Default: $0.15/1M input tokens, $0.60/1M output tokens.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "id": 2,
+      "datasource": "${DS_PROMETHEUS}",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "gradientMode": "scheme",
+            "showPoints": "auto",
+            "axisLabel": "Cost (USD)"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "value": null, "color": "green" },
+              { "value": 50, "color": "yellow" },
+              { "value": 100, "color": "red" }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Budget threshold" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } },
+              { "id": "custom.lineStyle", "value": { "fill": "dash", "dash": [10, 10] } },
+              { "id": "custom.lineWidth", "value": 2 },
+              { "id": "custom.fillOpacity", "value": 0 }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "expr": "(sum(increase(token_usage_total{namespace=\"llmops\", direction=\"input\"}[1d])) * $input_cost_per_1m / 1000000) + (sum(increase(token_usage_total{namespace=\"llmops\", direction=\"output\"}[1d])) * $output_cost_per_1m / 1000000)",
+          "legendFormat": "Estimated daily cost",
+          "refId": "A",
+          "interval": "1d"
+        },
+        {
+          "expr": "vector($daily_budget)",
+          "legendFormat": "Budget threshold",
+          "refId": "B"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max", "lastNotNull"] },
+        "tooltip": { "mode": "multi" }
+      }
+    },
+    {
+      "title": "Token Usage Per API Key",
+      "description": "Breakdown of token consumption by API key, showing input and output tokens and estimated cost.",
+      "type": "table",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "id": 3,
+      "datasource": "${DS_PROMETHEUS}",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "align": "auto", "filterable": true }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Estimated Cost" },
+            "properties": [
+              { "id": "unit", "value": "currencyUSD" },
+              { "id": "custom.width", "value": 120 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "API Key" },
+            "properties": [
+              { "id": "custom.width", "value": 200 }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "expr": "sum by (api_key) (increase(token_usage_total{namespace=\"llmops\", direction=\"input\"}[24h]))",
+          "legendFormat": "{{api_key}}",
+          "refId": "A",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "expr": "sum by (api_key) (increase(token_usage_total{namespace=\"llmops\", direction=\"output\"}[24h]))",
+          "legendFormat": "{{api_key}}",
+          "refId": "B",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "api_key": "API Key",
+              "Value #A": "Input Tokens (24h)",
+              "Value #B": "Output Tokens (24h)"
+            }
+          }
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "desc": true, "displayName": "Input Tokens (24h)" }],
+        "footer": {
+          "show": true,
+          "reducer": ["sum"],
+          "fields": ["Input Tokens (24h)", "Output Tokens (24h)"]
+        }
+      }
+    },
+    {
+      "title": "Budget Threshold with Alert Marker",
+      "description": "Daily cost trend with a budget line and alert marker when spending exceeds the configured threshold.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "id": 4,
+      "datasource": "${DS_PROMETHEUS}",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 15,
+            "gradientMode": "scheme",
+            "showPoints": "auto"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "value": null, "color": "green" },
+              { "value": 75, "color": "yellow" },
+              { "value": 100, "color": "red" }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Daily Budget" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#ef843c", "mode": "fixed" } },
+              { "id": "custom.lineStyle", "value": { "fill": "dash", "dash": [10, 10] } },
+              { "id": "custom.fillOpacity", "value": 0 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "ALERT: Over Budget" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } },
+              { "id": "custom.pointSize", "value": 10 },
+              { "id": "custom.showPoints", "value": "always" },
+              { "id": "custom.lineWidth", "value": 0 }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(cost_per_request_usd_sum{namespace=\"llmops\"}[1d]))",
+          "legendFormat": "Daily Spend",
+          "refId": "A",
+          "interval": "1d"
+        },
+        {
+          "expr": "vector($daily_budget)",
+          "legendFormat": "Daily Budget",
+          "refId": "B"
+        },
+        {
+          "expr": "sum(increase(cost_per_request_usd_sum{namespace=\"llmops\"}[1d])) > $daily_budget or vector(0) < 0",
+          "legendFormat": "ALERT: Over Budget",
+          "refId": "C",
+          "interval": "1d"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"] },
+        "tooltip": { "mode": "multi" }
+      }
+    },
+    {
+      "title": "Cumulative Monthly Spend (USD)",
+      "description": "Running total of estimated LLM costs for the current calendar month.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 },
+      "id": 5,
+      "datasource": "${DS_PROMETHEUS}",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "color": { "fixedColor": "#6ed0e0", "mode": "fixed" },
+          "custom": {
+            "lineWidth": 3,
+            "fillOpacity": 25,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "axisLabel": "Cumulative Cost (USD)"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "value": null, "color": "green" },
+              { "value": 2000, "color": "yellow" },
+              { "value": 3000, "color": "red" }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Monthly Budget" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } },
+              { "id": "custom.lineStyle", "value": { "fill": "dash", "dash": [10, 10] } },
+              { "id": "custom.fillOpacity", "value": 0 },
+              { "id": "custom.lineWidth", "value": 2 }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(cost_per_request_usd_sum{namespace=\"llmops\"}[30d]))",
+          "legendFormat": "Cumulative spend (30d)",
+          "refId": "A"
+        },
+        {
+          "expr": "vector($monthly_budget)",
+          "legendFormat": "Monthly Budget",
+          "refId": "B"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"] },
+        "tooltip": { "mode": "multi" }
+      }
+    }
+  ],
+  "refresh": "5m",
+  "schemaVersion": 39,
+  "tags": ["llmops", "tokens", "cost", "budget"],
+  "templating": {
+    "list": [
+      {
+        "current": { "selected": false, "text": "0.15", "value": "0.15" },
+        "hide": 0,
+        "label": "Input Cost ($/1M tokens)",
+        "name": "input_cost_per_1m",
+        "type": "textbox",
+        "query": "0.15"
+      },
+      {
+        "current": { "selected": false, "text": "0.60", "value": "0.60" },
+        "hide": 0,
+        "label": "Output Cost ($/1M tokens)",
+        "name": "output_cost_per_1m",
+        "type": "textbox",
+        "query": "0.60"
+      },
+      {
+        "current": { "selected": false, "text": "100", "value": "100" },
+        "hide": 0,
+        "label": "Daily Budget (USD)",
+        "name": "daily_budget",
+        "type": "textbox",
+        "query": "100"
+      },
+      {
+        "current": { "selected": false, "text": "3000", "value": "3000" },
+        "hide": 0,
+        "label": "Monthly Budget (USD)",
+        "name": "monthly_budget",
+        "type": "textbox",
+        "query": "3000"
+      }
+    ]
+  },
+  "time": { "from": "now-7d", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "LLMOps - Token Usage & Cost",
+  "uid": "llmops-token-cost",
+  "version": 1
+}

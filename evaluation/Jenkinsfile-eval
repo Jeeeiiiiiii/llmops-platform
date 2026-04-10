@@ -1,0 +1,205 @@
+/*
+ * Jenkinsfile-eval — CI pipeline for LLMOps prompt template evaluation
+ *
+ * Triggers on PRs that modify prompt_templates/ or evaluation/ files.
+ * Runs the eval suite against a staging gateway, posts results as a
+ * PR comment, and blocks merge if metrics regress beyond threshold.
+ */
+
+pipeline {
+    agent {
+        kubernetes {
+            label 'llmops-eval'
+            yaml '''
+apiVersion: v1
+kind: Pod
+spec:
+  containers:
+    - name: eval-runner
+      image: llmops/eval-runner:latest
+      command: ["sleep"]
+      args: ["infinity"]
+      resources:
+        requests:
+          cpu: "2"
+          memory: "4Gi"
+        limits:
+          cpu: "4"
+          memory: "8Gi"
+      volumeMounts:
+        - name: eval-workspace
+          mountPath: /workspace
+  volumes:
+    - name: eval-workspace
+      emptyDir: {}
+'''
+        }
+    }
+
+    triggers {
+        // Trigger on PRs that modify prompt templates or evaluation config
+        githubPullRequest(
+            triggerPhrase: '/run-eval',
+            useGitHubHooks: true,
+            permitAll: false,
+            allowedBranches: 'main',
+        )
+    }
+
+    options {
+        timeout(time: 30, unit: 'MINUTES')
+        timestamps()
+        disableConcurrentBuilds()
+    }
+
+    environment {
+        GATEWAY_URL       = credentials('llmops-staging-gateway-url')
+        API_KEY           = credentials('llmops-eval-api-key')
+        GITHUB_TOKEN      = credentials('github-token')
+        EVAL_DATASET      = 'evaluation/eval_dataset.jsonl'
+        EVAL_BASELINE     = 'evaluation/baseline.json'
+        EVAL_REPORT       = 'evaluation/eval_report.json'
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                container('eval-runner') {
+                    checkout scm
+                }
+            }
+        }
+
+        stage('Check Changes') {
+            steps {
+                container('eval-runner') {
+                    script {
+                        def changes = sh(
+                            script: "git diff --name-only origin/main...HEAD",
+                            returnStdout: true
+                        ).trim()
+
+                        env.PROMPT_CHANGED = changes.contains('prompt_templates/') ? 'true' : 'false'
+                        env.EVAL_CHANGED = changes.contains('evaluation/') ? 'true' : 'false'
+
+                        if (env.PROMPT_CHANGED == 'false' && env.EVAL_CHANGED == 'false') {
+                            echo "No prompt template or evaluation changes detected. Skipping eval."
+                            currentBuild.result = 'NOT_BUILT'
+                            return
+                        }
+
+                        echo "Changes detected — running evaluation suite"
+                        echo "Prompt templates changed: ${env.PROMPT_CHANGED}"
+                        echo "Evaluation config changed: ${env.EVAL_CHANGED}"
+                    }
+                }
+            }
+        }
+
+        stage('Install Dependencies') {
+            when {
+                expression { env.PROMPT_CHANGED == 'true' || env.EVAL_CHANGED == 'true' }
+            }
+            steps {
+                container('eval-runner') {
+                    sh '''
+                        pip install --no-cache-dir -r requirements.txt
+                    '''
+                }
+            }
+        }
+
+        stage('Run Evaluation') {
+            when {
+                expression { env.PROMPT_CHANGED == 'true' || env.EVAL_CHANGED == 'true' }
+            }
+            steps {
+                container('eval-runner') {
+                    sh """
+                        python evaluation/run_eval.py \
+                            --dataset ${EVAL_DATASET} \
+                            --gateway-url ${GATEWAY_URL} \
+                            --api-key ${API_KEY} \
+                            --baseline ${EVAL_BASELINE} \
+                            --output ${EVAL_REPORT} \
+                            --log-level INFO
+                    """
+                }
+            }
+        }
+
+        stage('Post Results') {
+            when {
+                expression { env.PROMPT_CHANGED == 'true' || env.EVAL_CHANGED == 'true' }
+            }
+            steps {
+                container('eval-runner') {
+                    script {
+                        def report = readJSON file: env.EVAL_REPORT
+
+                        def comment = """
+## LLMOps Evaluation Results
+
+| Metric | Value |
+|--------|-------|
+| Total Questions | ${report.total_questions} |
+| Pass Rate | ${(report.pass_rate * 100).round(1)}% |
+| Mean Relevance | ${report.mean_relevance} |
+| Mean Faithfulness | ${report.mean_faithfulness} |
+| P50 Latency | ${report.p50_latency_ms} ms |
+| P95 Latency | ${report.p95_latency_ms} ms |
+| P99 Latency | ${report.p99_latency_ms} ms |
+
+### Category Breakdown
+"""
+                        report.results_by_category.each { cat, stats ->
+                            comment += "- **${cat}**: relevance=${stats.mean_relevance}, "
+                            comment += "pass=${(stats.pass_rate * 100).round(1)}%, "
+                            comment += "latency=${stats.mean_latency_ms}ms\n"
+                        }
+
+                        if (report.regression_detected) {
+                            comment += "\n### Regressions Detected\n"
+                            report.regression_details.each { detail ->
+                                comment += "- ${detail}\n"
+                            }
+                            comment += "\n**Status: FAILED** — Merge blocked due to metric regression.\n"
+                        } else {
+                            comment += "\n**Status: PASSED** — All metrics within acceptable thresholds.\n"
+                        }
+
+                        // Post comment to PR
+                        if (env.CHANGE_ID) {
+                            sh """
+                                curl -s -X POST \
+                                    -H "Authorization: token ${GITHUB_TOKEN}" \
+                                    -H "Content-Type: application/json" \
+                                    -d '{"body": ${groovy.json.JsonOutput.toJson(comment)}}' \
+                                    "https://api.github.com/repos/\${GITHUB_REPOSITORY}/issues/${env.CHANGE_ID}/comments"
+                            """
+                        }
+
+                        // Fail build if regression detected
+                        if (report.regression_detected) {
+                            error("Evaluation failed — regression detected in metrics")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            container('eval-runner') {
+                archiveArtifacts artifacts: 'evaluation/eval_report.json', allowEmptyArchive: true
+            }
+        }
+        failure {
+            echo "Evaluation pipeline failed. Check the eval report for details."
+        }
+        success {
+            echo "Evaluation pipeline completed successfully."
+        }
+    }
+}

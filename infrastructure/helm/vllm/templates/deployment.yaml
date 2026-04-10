@@ -1,0 +1,140 @@
+###############################################################################
+# vLLM StatefulSet
+# Uses StatefulSet (not Deployment) for stable network identity and persistent
+# model-weight storage across restarts.
+###############################################################################
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "vllm.fullname" . }}
+  labels:
+    {{- include "vllm.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "vllm.fullname" . }}
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "vllm.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        {{- toYaml .Values.podAnnotations | nindent 8 }}
+      labels:
+        {{- include "vllm.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "vllm.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      # Use NVIDIA container runtime
+      runtimeClassName: nvidia
+      terminationGracePeriodSeconds: 120
+      containers:
+        - name: vllm
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - "--model"
+            - "{{ .Values.model.name }}"
+            - "--tensor-parallel-size"
+            - "{{ .Values.engine.tensorParallelSize }}"
+            - "--max-model-len"
+            - "{{ .Values.engine.maxModelLen }}"
+            - "--gpu-memory-utilization"
+            - "{{ .Values.engine.gpuMemoryUtilization }}"
+            - "--max-num-batched-tokens"
+            - "{{ .Values.engine.maxNumBatchedTokens }}"
+            - "--max-num-seqs"
+            - "{{ .Values.engine.maxNumSeqs }}"
+            - "--dtype"
+            - "{{ .Values.engine.dtype }}"
+            {{- if .Values.engine.quantization }}
+            - "--quantization"
+            - "{{ .Values.engine.quantization }}"
+            {{- end }}
+            {{- if .Values.engine.enforceEager }}
+            - "--enforce-eager"
+            {{- end }}
+            {{- if .Values.engine.trustRemoteCode }}
+            - "--trust-remote-code"
+            {{- end }}
+            - "--host"
+            - "0.0.0.0"
+            - "--port"
+            - "8000"
+          env:
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.model.hfTokenSecret }}
+                  key: {{ .Values.model.hfTokenKey }}
+            # Cache models on the PVC
+            - name: HF_HOME
+              value: "{{ .Values.modelStorage.mountPath }}/hf_cache"
+            - name: TRANSFORMERS_CACHE
+              value: "{{ .Values.modelStorage.mountPath }}/hf_cache"
+            # NCCL settings for multi-GPU tensor parallelism
+            - name: NCCL_DEBUG
+              value: "WARN"
+            - name: NCCL_SOCKET_IFNAME
+              value: "eth0"
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          {{- with .Values.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.startupProbe }}
+          startupProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            {{- if .Values.modelStorage.enabled }}
+            - name: model-weights
+              mountPath: {{ .Values.modelStorage.mountPath }}
+            {{- end }}
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        # Shared memory for PyTorch DataLoader and NCCL
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: "16Gi"
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  {{- if .Values.modelStorage.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: model-weights
+      spec:
+        accessModes:
+          - {{ .Values.modelStorage.accessMode }}
+        storageClassName: {{ .Values.modelStorage.storageClass }}
+        resources:
+          requests:
+            storage: {{ .Values.modelStorage.size }}
+  {{- end }}

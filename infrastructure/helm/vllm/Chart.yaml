@@ -1,0 +1,18 @@
+apiVersion: v2
+name: vllm
+description: >-
+  Helm chart for vLLM — high-throughput LLM inference engine with PagedAttention.
+  Deploys as a StatefulSet with GPU resources, model weight volumes, and
+  autoscaling based on GPU utilisation and request queue depth.
+type: application
+version: 1.0.0
+appVersion: "0.4.1"
+keywords:
+  - llm
+  - inference
+  - vllm
+  - gpu
+  - nvidia
+maintainers:
+  - name: LLMOps Team
+    email: llmops@company.com

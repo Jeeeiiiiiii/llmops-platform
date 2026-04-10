@@ -1,0 +1,16 @@
+apiVersion: v2
+name: qdrant
+description: >-
+  Helm chart for Qdrant vector database — high-performance similarity search
+  for the RAG pipeline. Deployed as a StatefulSet with persistent storage.
+type: application
+version: 1.0.0
+appVersion: "1.8.4"
+keywords:
+  - vector-database
+  - qdrant
+  - similarity-search
+  - rag
+maintainers:
+  - name: LLMOps Team
+    email: llmops@company.com

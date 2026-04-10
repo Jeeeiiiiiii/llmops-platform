@@ -1,0 +1,16 @@
+apiVersion: v2
+name: llm-gateway
+description: >-
+  Helm chart for the LLMOps API Gateway — handles authentication, rate limiting,
+  request routing, and observability for LLM inference traffic.
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+keywords:
+  - api-gateway
+  - llm
+  - rate-limiting
+  - authentication
+maintainers:
+  - name: LLMOps Team
+    email: llmops@company.com

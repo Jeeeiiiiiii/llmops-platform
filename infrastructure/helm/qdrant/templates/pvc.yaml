@@ -1,0 +1,21 @@
+{{/*
+  Note: The primary PVCs are created via volumeClaimTemplates in the StatefulSet.
+  This standalone PVC is for shared snapshot storage (e.g., NFS) that may be
+  accessed by backup CronJobs outside the StatefulSet.
+*/}}
+{{- if .Values.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "qdrant.fullname" . }}-shared-snapshots
+  labels:
+    {{- include "qdrant.labels" . | nindent 4 }}
+    component: backup
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: {{ .Values.persistence.storageClass }}
+  resources:
+    requests:
+      storage: "20Gi"
+{{- end }}

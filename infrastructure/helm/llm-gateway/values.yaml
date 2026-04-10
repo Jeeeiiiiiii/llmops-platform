@@ -1,0 +1,107 @@
+###############################################################################
+# LLM Gateway — Default Values
+###############################################################################
+
+replicaCount: 2
+
+image:
+  repository: llmops/gateway
+  tag: "1.0.0"
+  pullPolicy: IfNotPresent
+
+nameOverride: ""
+fullnameOverride: ""
+
+# ---------------------------------------------------------------------------
+# Gateway Configuration
+# ---------------------------------------------------------------------------
+gateway:
+  # Upstream vLLM service URL
+  vllmUrl: "http://vllm:8000"
+  # Upstream retriever service URL
+  retrieverUrl: "http://retriever:8080"
+
+  # Authentication
+  auth:
+    enabled: true
+    # Secret containing API keys (key name -> key value)
+    apiKeySecret: "llm-gateway-api-keys"
+
+  # Rate limiting (per API key)
+  rateLimiting:
+    enabled: true
+    defaultRequestsPerMinute: 60
+    defaultTokensPerMinute: 100000
+    # Per-tier overrides
+    tiers:
+      free:
+        requestsPerMinute: 10
+        tokensPerMinute: 10000
+      standard:
+        requestsPerMinute: 60
+        tokensPerMinute: 100000
+      enterprise:
+        requestsPerMinute: 600
+        tokensPerMinute: 1000000
+
+  # Request/response limits
+  maxInputTokens: 4096
+  maxOutputTokens: 4096
+  requestTimeoutSeconds: 120
+
+  # Logging
+  logLevel: "INFO"
+  logPiiRedaction: true
+
+# ---------------------------------------------------------------------------
+# Service
+# ---------------------------------------------------------------------------
+service:
+  type: ClusterIP
+  port: 8080
+  annotations: {}
+
+# ---------------------------------------------------------------------------
+# Resources
+# ---------------------------------------------------------------------------
+resources:
+  requests:
+    cpu: "500m"
+    memory: "512Mi"
+  limits:
+    cpu: "2"
+    memory: "1Gi"
+
+# ---------------------------------------------------------------------------
+# Probes
+# ---------------------------------------------------------------------------
+livenessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 15
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+# ---------------------------------------------------------------------------
+# Pod settings
+# ---------------------------------------------------------------------------
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "8080"
+  prometheus.io/path: "/metrics"
+
+tolerations: []
+nodeSelector: {}
+affinity: {}
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}

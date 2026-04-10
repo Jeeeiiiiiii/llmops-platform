@@ -1,0 +1,244 @@
+###############################################################################
+# RAG Ingestion Pipeline — Argo Workflow
+#
+# Three-step DAG:
+#   1. load-documents  — Scan source (Azure Blob / local) and produce JSONL
+#   2. chunk-documents — Split loaded docs into overlapping chunks
+#   3. embed-and-upload — Generate embeddings and upsert into Qdrant
+#
+# Trigger: manual submission, webhook on blob storage events, or CronWorkflow
+###############################################################################
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: rag-ingestion-
+  namespace: llmops
+  labels:
+    app.kubernetes.io/part-of: llmops-platform
+    pipeline: rag-ingestion
+spec:
+  entrypoint: ingestion-dag
+  serviceAccountName: argo-workflow-sa
+
+  # -------------------------------------------------------------------------
+  # Global parameters — override at submission time
+  # -------------------------------------------------------------------------
+  arguments:
+    parameters:
+      - name: source_path
+        value: "/data/raw-documents"
+      - name: qdrant_url
+        value: "http://qdrant.llmops.svc.cluster.local:6333"
+      - name: collection_name
+        value: "documents"
+      - name: chunk_size
+        value: "512"
+      - name: chunk_overlap
+        value: "50"
+      - name: embedding_model
+        value: "all-MiniLM-L6-v2"
+      - name: embedding_batch_size
+        value: "64"
+
+  # -------------------------------------------------------------------------
+  # Shared volumes
+  # -------------------------------------------------------------------------
+  volumeClaimTemplates:
+    - metadata:
+        name: pipeline-workspace
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: managed-premium
+        resources:
+          requests:
+            storage: 20Gi
+
+  # -------------------------------------------------------------------------
+  # DAG definition
+  # -------------------------------------------------------------------------
+  templates:
+    - name: ingestion-dag
+      dag:
+        tasks:
+          - name: load-documents
+            template: load-documents
+            arguments:
+              parameters:
+                - name: source_path
+                  value: "{{workflow.parameters.source_path}}"
+
+          - name: chunk-documents
+            template: chunk-documents
+            dependencies: [load-documents]
+            arguments:
+              parameters:
+                - name: chunk_size
+                  value: "{{workflow.parameters.chunk_size}}"
+                - name: chunk_overlap
+                  value: "{{workflow.parameters.chunk_overlap}}"
+
+          - name: embed-and-upload
+            template: embed-and-upload
+            dependencies: [chunk-documents]
+            arguments:
+              parameters:
+                - name: qdrant_url
+                  value: "{{workflow.parameters.qdrant_url}}"
+                - name: collection_name
+                  value: "{{workflow.parameters.collection_name}}"
+                - name: embedding_model
+                  value: "{{workflow.parameters.embedding_model}}"
+                - name: embedding_batch_size
+                  value: "{{workflow.parameters.embedding_batch_size}}"
+
+    # -----------------------------------------------------------------------
+    # Step 1: Load documents from Azure Blob or local directory
+    # -----------------------------------------------------------------------
+    - name: load-documents
+      inputs:
+        parameters:
+          - name: source_path
+      container:
+        image: llmops/rag-ingestion:latest
+        command: ["python", "-m", "rag_pipeline.ingestion.document_loader"]
+        args:
+          - "--source-dir"
+          - "{{inputs.parameters.source_path}}"
+          - "--output"
+          - "/workspace/loaded.jsonl"
+          - "--log-level"
+          - "INFO"
+        volumeMounts:
+          - name: pipeline-workspace
+            mountPath: /workspace
+          - name: source-data
+            mountPath: /data
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "1Gi"
+          limits:
+            cpu: "2"
+            memory: "4Gi"
+      volumes:
+        - name: source-data
+          persistentVolumeClaim:
+            claimName: rag-source-data
+      activeDeadlineSeconds: 1800
+      retryStrategy:
+        limit: 2
+        retryPolicy: "OnFailure"
+
+    # -----------------------------------------------------------------------
+    # Step 2: Chunk documents
+    # -----------------------------------------------------------------------
+    - name: chunk-documents
+      inputs:
+        parameters:
+          - name: chunk_size
+          - name: chunk_overlap
+      container:
+        image: llmops/rag-ingestion:latest
+        command: ["python", "-m", "rag_pipeline.ingestion.chunker"]
+        args:
+          - "--input"
+          - "/workspace/loaded.jsonl"
+          - "--output"
+          - "/workspace/chunks/chunks.jsonl"
+          - "--chunk-size"
+          - "{{inputs.parameters.chunk_size}}"
+          - "--overlap"
+          - "{{inputs.parameters.chunk_overlap}}"
+          - "--log-level"
+          - "INFO"
+        volumeMounts:
+          - name: pipeline-workspace
+            mountPath: /workspace
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "2Gi"
+          limits:
+            cpu: "2"
+            memory: "4Gi"
+      activeDeadlineSeconds: 1800
+      retryStrategy:
+        limit: 2
+        retryPolicy: "OnFailure"
+
+    # -----------------------------------------------------------------------
+    # Step 3: Generate embeddings and upload to Qdrant
+    # -----------------------------------------------------------------------
+    - name: embed-and-upload
+      inputs:
+        parameters:
+          - name: qdrant_url
+          - name: collection_name
+          - name: embedding_model
+          - name: embedding_batch_size
+      container:
+        image: llmops/rag-ingestion:latest
+        command: ["python", "-m", "rag_pipeline.ingestion.embedder"]
+        args:
+          - "--input-dir"
+          - "/workspace/chunks"
+          - "--qdrant-url"
+          - "{{inputs.parameters.qdrant_url}}"
+          - "--collection-name"
+          - "{{inputs.parameters.collection_name}}"
+          - "--model-name"
+          - "{{inputs.parameters.embedding_model}}"
+          - "--batch-size"
+          - "{{inputs.parameters.embedding_batch_size}}"
+          - "--log-level"
+          - "INFO"
+        volumeMounts:
+          - name: pipeline-workspace
+            mountPath: /workspace
+        resources:
+          requests:
+            cpu: "2"
+            memory: "4Gi"
+          limits:
+            cpu: "4"
+            memory: "8Gi"
+      activeDeadlineSeconds: 3600
+      retryStrategy:
+        limit: 2
+        retryPolicy: "OnFailure"
+
+---
+###############################################################################
+# CronWorkflow — schedule ingestion nightly or trigger via webhook
+###############################################################################
+apiVersion: argoproj.io/v1alpha1
+kind: CronWorkflow
+metadata:
+  name: rag-ingestion-nightly
+  namespace: llmops
+spec:
+  schedule: "0 2 * * *"  # 2:00 AM UTC daily
+  timezone: "UTC"
+  concurrencyPolicy: Replace
+  startingDeadlineSeconds: 300
+  workflowSpec:
+    entrypoint: ingestion-dag
+    serviceAccountName: argo-workflow-sa
+    arguments:
+      parameters:
+        - name: source_path
+          value: "/data/raw-documents"
+        - name: qdrant_url
+          value: "http://qdrant.llmops.svc.cluster.local:6333"
+        - name: collection_name
+          value: "documents"
+        - name: chunk_size
+          value: "512"
+        - name: chunk_overlap
+          value: "50"
+        - name: embedding_model
+          value: "all-MiniLM-L6-v2"
+        - name: embedding_batch_size
+          value: "64"
+    workflowTemplateRef:
+      name: rag-ingestion

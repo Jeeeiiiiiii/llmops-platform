@@ -1,0 +1,376 @@
+/*
+ * Jenkinsfile — Full CI/CD Pipeline for the LLMOps Platform
+ *
+ * Pipeline stages:
+ *   1. Build Gateway Image     — multi-stage Docker build for the API gateway
+ *   2. Build Retriever Image   — multi-stage Docker build for the retriever service
+ *   3. Push                    — push images to the container registry
+ *   4. Deploy Stack            — helm upgrade the umbrella chart
+ *   5. Run Eval                — automated evaluation against the deployed stack
+ *   6. Canary Prompt Version   — apply Istio canary routing for new prompt templates
+ *   7. Monitor                 — wait and check quality metrics during canary
+ *   8. Full Rollout            — promote canary to stable or rollback
+ *
+ * Post: Slack notification on success/failure.
+ */
+
+pipeline {
+    agent {
+        kubernetes {
+            label 'llmops-cicd'
+            yaml '''
+apiVersion: v1
+kind: Pod
+spec:
+  serviceAccountName: jenkins-deployer
+  containers:
+    - name: docker
+      image: docker:24-dind
+      command: ["dockerd-entrypoint.sh"]
+      args: ["--tls=false"]
+      securityContext:
+        privileged: true
+      env:
+        - name: DOCKER_TLS_CERTDIR
+          value: ""
+      resources:
+        requests:
+          cpu: "2"
+          memory: "4Gi"
+        limits:
+          cpu: "4"
+          memory: "8Gi"
+      volumeMounts:
+        - name: docker-graph
+          mountPath: /var/lib/docker
+    - name: deployer
+      image: alpine/k8s:1.28.4
+      command: ["sleep"]
+      args: ["infinity"]
+      resources:
+        requests:
+          cpu: "1"
+          memory: "2Gi"
+        limits:
+          cpu: "2"
+          memory: "4Gi"
+    - name: eval-runner
+      image: python:3.11-slim
+      command: ["sleep"]
+      args: ["infinity"]
+      resources:
+        requests:
+          cpu: "2"
+          memory: "4Gi"
+        limits:
+          cpu: "4"
+          memory: "8Gi"
+  volumes:
+    - name: docker-graph
+      emptyDir: {}
+'''
+        }
+    }
+
+    options {
+        timeout(time: 60, unit: 'MINUTES')
+        timestamps()
+        disableConcurrentBuilds()
+        buildDiscarder(logRotator(numToKeepStr: '20'))
+    }
+
+    environment {
+        // Container registry
+        REGISTRY         = credentials('container-registry-url')
+        REGISTRY_CREDS   = credentials('container-registry-credentials')
+
+        // Image names
+        GATEWAY_IMAGE    = "${REGISTRY}/llmops/gateway"
+        RETRIEVER_IMAGE  = "${REGISTRY}/llmops/retriever"
+        IMAGE_TAG        = "${env.GIT_COMMIT?.take(8) ?: 'latest'}"
+
+        // Kubernetes / Helm
+        KUBE_NAMESPACE   = 'llmops'
+        HELM_RELEASE     = 'llm-stack'
+        HELM_CHART       = 'deployment/helm/llm-stack'
+
+        // Evaluation
+        GATEWAY_URL      = credentials('llmops-staging-gateway-url')
+        API_KEY          = credentials('llmops-eval-api-key')
+        EVAL_DATASET     = 'evaluation/eval_dataset.jsonl'
+        EVAL_BASELINE    = 'evaluation/baseline.json'
+        EVAL_REPORT      = 'evaluation/eval_report.json'
+
+        // Slack
+        SLACK_CHANNEL    = '#llmops-deployments'
+        SLACK_CREDS      = credentials('slack-webhook-url')
+    }
+
+    stages {
+        // =================================================================
+        // Stage 1: Build Gateway Image
+        // =================================================================
+        stage('Build Gateway Image') {
+            steps {
+                container('docker') {
+                    sh """
+                        docker build \
+                            -t ${GATEWAY_IMAGE}:${IMAGE_TAG} \
+                            -t ${GATEWAY_IMAGE}:latest \
+                            -f gateway/Dockerfile \
+                            .
+                    """
+                }
+            }
+        }
+
+        // =================================================================
+        // Stage 2: Build Retriever Image
+        // =================================================================
+        stage('Build Retriever Image') {
+            steps {
+                container('docker') {
+                    sh """
+                        docker build \
+                            -t ${RETRIEVER_IMAGE}:${IMAGE_TAG} \
+                            -t ${RETRIEVER_IMAGE}:latest \
+                            -f rag_pipeline/retriever/Dockerfile \
+                            .
+                    """
+                }
+            }
+        }
+
+        // =================================================================
+        // Stage 3: Push Images to Registry
+        // =================================================================
+        stage('Push') {
+            steps {
+                container('docker') {
+                    sh """
+                        echo "${REGISTRY_CREDS_PSW}" | docker login ${REGISTRY} \
+                            -u "${REGISTRY_CREDS_USR}" --password-stdin
+
+                        docker push ${GATEWAY_IMAGE}:${IMAGE_TAG}
+                        docker push ${GATEWAY_IMAGE}:latest
+
+                        docker push ${RETRIEVER_IMAGE}:${IMAGE_TAG}
+                        docker push ${RETRIEVER_IMAGE}:latest
+                    """
+                }
+            }
+        }
+
+        // =================================================================
+        // Stage 4: Deploy Stack via Helm
+        // =================================================================
+        stage('Deploy Stack') {
+            steps {
+                container('deployer') {
+                    sh """
+                        # Update Helm dependencies (resolve local sub-charts)
+                        helm dependency update ${HELM_CHART}
+
+                        # Deploy or upgrade the umbrella chart
+                        helm upgrade --install ${HELM_RELEASE} ${HELM_CHART} \
+                            --namespace ${KUBE_NAMESPACE} \
+                            --create-namespace \
+                            --set llm-gateway.image.tag=${IMAGE_TAG} \
+                            --set global.imageRegistry=${REGISTRY} \
+                            --wait \
+                            --timeout 10m
+
+                        # Verify all pods are running
+                        kubectl -n ${KUBE_NAMESPACE} rollout status \
+                            deployment/${HELM_RELEASE}-llm-gateway \
+                            --timeout=300s
+
+                        echo "Stack deployed successfully with image tag: ${IMAGE_TAG}"
+                    """
+                }
+            }
+        }
+
+        // =================================================================
+        // Stage 5: Run Evaluation Suite
+        // =================================================================
+        stage('Run Eval') {
+            steps {
+                container('eval-runner') {
+                    sh """
+                        pip install --no-cache-dir -r requirements.txt
+
+                        python evaluation/run_eval.py \
+                            --dataset ${EVAL_DATASET} \
+                            --gateway-url ${GATEWAY_URL} \
+                            --api-key ${API_KEY} \
+                            --baseline ${EVAL_BASELINE} \
+                            --output ${EVAL_REPORT} \
+                            --log-level INFO
+                    """
+
+                    // Parse report and check for regressions
+                    script {
+                        def report = readJSON file: EVAL_REPORT
+
+                        echo "Eval Results: relevance=${report.mean_relevance}, " +
+                             "faithfulness=${report.mean_faithfulness}, " +
+                             "pass_rate=${report.pass_rate}"
+
+                        if (report.regression_detected) {
+                            error("Evaluation FAILED: regression detected. " +
+                                  "Details: ${report.regression_details}")
+                        }
+                    }
+                }
+            }
+        }
+
+        // =================================================================
+        // Stage 6: Canary Prompt Version
+        // =================================================================
+        stage('Canary Prompt Version') {
+            when {
+                // Only run canary if prompt templates were changed
+                changeset "gateway/prompt_templates/**"
+            }
+            steps {
+                container('deployer') {
+                    sh """
+                        echo "Applying canary routing for prompt version testing..."
+
+                        # Deploy canary gateway with new prompt templates
+                        kubectl -n ${KUBE_NAMESPACE} apply \
+                            -f deployment/canary/prompt-version-canary.yaml
+
+                        echo "Canary routing active: 90% stable / 10% canary"
+                    """
+                }
+            }
+        }
+
+        // =================================================================
+        // Stage 7: Monitor Canary
+        // =================================================================
+        stage('Monitor') {
+            when {
+                changeset "gateway/prompt_templates/**"
+            }
+            steps {
+                container('deployer') {
+                    script {
+                        echo "Monitoring canary for 10 minutes..."
+
+                        // Wait for canary metrics to accumulate
+                        sleep(time: 10, unit: 'MINUTES')
+
+                        // Query Prometheus for canary quality metrics
+                        def canaryErrorRate = sh(
+                            script: """
+                                kubectl -n ${KUBE_NAMESPACE} exec deploy/prometheus-server -- \
+                                    wget -qO- 'http://localhost:9090/api/v1/query?query=sum(rate(request_errors_total{prompt_version="v2"}[10m]))/sum(rate(chat_latency_seconds_count{prompt_version="v2"}[10m]))' \
+                                    | python3 -c "import sys,json; r=json.load(sys.stdin); print(r['data']['result'][0]['value'][1] if r['data']['result'] else '0')"
+                            """,
+                            returnStdout: true
+                        ).trim().toFloat()
+
+                        echo "Canary error rate: ${canaryErrorRate}"
+
+                        if (canaryErrorRate > 0.05) {
+                            echo "Canary error rate too high (${canaryErrorRate} > 5%). Rolling back."
+
+                            sh """
+                                kubectl -n ${KUBE_NAMESPACE} delete \
+                                    virtualservice llm-gateway-canary \
+                                    --ignore-not-found=true
+                            """
+
+                            error("Canary failed: error rate ${canaryErrorRate} exceeds 5% threshold")
+                        }
+
+                        echo "Canary metrics look healthy. Proceeding to full rollout."
+                    }
+                }
+            }
+        }
+
+        // =================================================================
+        // Stage 8: Full Rollout
+        // =================================================================
+        stage('Full Rollout') {
+            when {
+                changeset "gateway/prompt_templates/**"
+            }
+            steps {
+                container('deployer') {
+                    sh """
+                        echo "Promoting canary to full rollout..."
+
+                        # Update the stable deployment with the new prompt version
+                        kubectl -n ${KUBE_NAMESPACE} set env \
+                            deployment/${HELM_RELEASE}-llm-gateway \
+                            PROMPT_VERSION=v2
+
+                        # Wait for rollout to complete
+                        kubectl -n ${KUBE_NAMESPACE} rollout status \
+                            deployment/${HELM_RELEASE}-llm-gateway \
+                            --timeout=300s
+
+                        # Remove canary routing — all traffic goes to stable
+                        kubectl -n ${KUBE_NAMESPACE} delete \
+                            virtualservice llm-gateway-canary \
+                            --ignore-not-found=true
+
+                        kubectl -n ${KUBE_NAMESPACE} delete \
+                            destinationrule llm-gateway-destinations \
+                            --ignore-not-found=true
+
+                        echo "Full rollout complete. Prompt version v2 is now stable."
+                    """
+                }
+            }
+        }
+    }
+
+    // =====================================================================
+    // Post-build actions
+    // =====================================================================
+    post {
+        success {
+            slackSend(
+                channel: env.SLACK_CHANNEL,
+                color: 'good',
+                message: """
+:white_check_mark: *LLMOps Deploy Succeeded*
+*Branch:* ${env.GIT_BRANCH}
+*Commit:* ${env.GIT_COMMIT?.take(8)}
+*Image Tag:* ${IMAGE_TAG}
+*Build:* <${env.BUILD_URL}|#${env.BUILD_NUMBER}>
+*Eval Pass Rate:* check build logs
+                """.stripIndent().trim()
+            )
+        }
+
+        failure {
+            slackSend(
+                channel: env.SLACK_CHANNEL,
+                color: 'danger',
+                message: """
+:x: *LLMOps Deploy Failed*
+*Branch:* ${env.GIT_BRANCH}
+*Commit:* ${env.GIT_COMMIT?.take(8)}
+*Stage:* ${env.STAGE_NAME}
+*Build:* <${env.BUILD_URL}|#${env.BUILD_NUMBER}>
+Please investigate immediately.
+                """.stripIndent().trim()
+            )
+        }
+
+        always {
+            container('eval-runner') {
+                archiveArtifacts artifacts: 'evaluation/eval_report.json',
+                    allowEmptyArchive: true
+            }
+        }
+    }
+}

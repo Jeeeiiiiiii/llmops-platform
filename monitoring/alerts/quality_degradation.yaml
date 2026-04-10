@@ -1,0 +1,109 @@
+###############################################################################
+# PrometheusRule — Quality Degradation Alerts
+#
+# Fires when LLM output quality metrics (user feedback, guardrail block
+# rate, retrieval relevance) breach acceptable thresholds.
+###############################################################################
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: llmops-quality-alerts
+  namespace: llmops
+  labels:
+    app.kubernetes.io/name: llmops
+    app.kubernetes.io/component: monitoring
+    app.kubernetes.io/part-of: llmops-platform
+    prometheus: kube-prometheus
+    role: alert-rules
+spec:
+  groups:
+    - name: llmops.quality
+      rules:
+        # -----------------------------------------------------------------
+        # WARNING: Average user feedback score below 0.6 for 24 hours
+        # -----------------------------------------------------------------
+        # User feedback is recorded as positive (1) or negative (0).
+        # A sustained low score indicates the model is producing unhelpful
+        # or incorrect answers at scale.
+        - alert: LLMQualityDrop
+          expr: |
+            (
+              sum(rate(llm_user_feedback_total{namespace="llmops", rating="positive"}[24h]))
+              /
+              sum(rate(llm_user_feedback_total{namespace="llmops"}[24h]))
+            ) < 0.6
+          for: 24h
+          labels:
+            severity: warning
+            team: llmops
+            component: gateway
+          annotations:
+            summary: "LLM user feedback score below 0.6 for 24 hours"
+            description: >-
+              The average user feedback positive ratio has been
+              {{ $value | printf "%.2f" }} (below 0.6 threshold) for the
+              last 24 hours. This sustained quality degradation may be
+              caused by: stale knowledge base content, a model or prompt
+              template regression, or retrieval quality issues. Run the
+              eval suite and review recent prompt template changes.
+            runbook_url: "https://wiki.internal/runbooks/llmops/quality-drop"
+            dashboard_url: "https://grafana.internal/d/llmops-quality"
+
+        # -----------------------------------------------------------------
+        # WARNING: Guardrail block rate exceeds 15% for 1 hour
+        # -----------------------------------------------------------------
+        # A high block rate suggests either an attack (prompt injection
+        # campaign) or overly aggressive guardrail configuration that is
+        # blocking legitimate traffic.
+        - alert: LLMHighGuardrailBlockRate
+          expr: |
+            (
+              sum(rate(guardrail_blocks_total{namespace="llmops"}[1h]))
+              /
+              sum(rate(chat_latency_seconds_count{namespace="llmops"}[1h]))
+            ) > 0.15
+          for: 1h
+          labels:
+            severity: warning
+            team: llmops
+            component: guardrails
+          annotations:
+            summary: "Guardrail block rate exceeds 15%"
+            description: >-
+              {{ $value | printf "%.1f" }}% of requests have been blocked by
+              guardrails over the last hour (threshold: 15%). Check the input
+              validator and output filter logs for patterns. If this is a
+              targeted attack, consider IP-level rate limiting. If legitimate
+              requests are being blocked, review and tune the guardrail
+              configuration (injection patterns, forbidden topics).
+            runbook_url: "https://wiki.internal/runbooks/llmops/guardrail-rate"
+            dashboard_url: "https://grafana.internal/d/llmops-quality"
+
+        # -----------------------------------------------------------------
+        # WARNING: Average retrieval relevance below 0.5 for 6 hours
+        # -----------------------------------------------------------------
+        # Low retrieval scores mean the vector search is returning poor
+        # context, leading to irrelevant or hallucinated LLM answers.
+        - alert: LLMRetrievalQualityLow
+          expr: |
+            (
+              avg_over_time(
+                (avg_relevance_score_sum{namespace="llmops"} / avg_relevance_score_count{namespace="llmops"})[6h:5m]
+              )
+            ) < 0.5
+          for: 6h
+          labels:
+            severity: warning
+            team: llmops
+            component: retriever
+          annotations:
+            summary: "Retrieval relevance score below 0.5 for 6 hours"
+            description: >-
+              The average retrieval relevance score has been
+              {{ $value | printf "%.3f" }} (below 0.5 threshold) for the
+              last 6 hours. This typically indicates: embedding model drift,
+              stale or incomplete document index, or a mismatch between
+              query patterns and indexed content. Re-run the ingestion
+              pipeline and verify the Qdrant collection health.
+            runbook_url: "https://wiki.internal/runbooks/llmops/retrieval-quality"
+            dashboard_url: "https://grafana.internal/d/llmops-quality"

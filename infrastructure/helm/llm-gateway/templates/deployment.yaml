@@ -1,0 +1,96 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "llm-gateway.fullname" . }}
+  labels:
+    {{- include "llm-gateway.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "llm-gateway.selectorLabels" . | nindent 6 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      annotations:
+        {{- toYaml .Values.podAnnotations | nindent 8 }}
+        # Force rollout when configmap changes
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+      labels:
+        {{- include "llm-gateway.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "llm-gateway.serviceAccountName" . }}
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: gateway
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: VLLM_URL
+              value: {{ .Values.gateway.vllmUrl | quote }}
+            - name: RETRIEVER_URL
+              value: {{ .Values.gateway.retrieverUrl | quote }}
+            - name: LOG_LEVEL
+              value: {{ .Values.gateway.logLevel | quote }}
+            - name: LOG_PII_REDACTION
+              value: {{ .Values.gateway.logPiiRedaction | quote }}
+            - name: MAX_INPUT_TOKENS
+              value: {{ .Values.gateway.maxInputTokens | quote }}
+            - name: MAX_OUTPUT_TOKENS
+              value: {{ .Values.gateway.maxOutputTokens | quote }}
+            - name: REQUEST_TIMEOUT
+              value: {{ .Values.gateway.requestTimeoutSeconds | quote }}
+            {{- if .Values.gateway.auth.enabled }}
+            - name: AUTH_ENABLED
+              value: "true"
+            - name: API_KEY_SECRET_NAME
+              value: {{ .Values.gateway.auth.apiKeySecret | quote }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          {{- with .Values.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /app/config
+              readOnly: true
+            {{- if .Values.gateway.auth.enabled }}
+            - name: api-keys
+              mountPath: /app/secrets
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "llm-gateway.fullname" . }}-config
+        {{- if .Values.gateway.auth.enabled }}
+        - name: api-keys
+          secret:
+            secretName: {{ .Values.gateway.auth.apiKeySecret }}
+        {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

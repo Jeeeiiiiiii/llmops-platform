@@ -1,0 +1,55 @@
+###############################################################################
+# LLM Stack — Umbrella Helm Chart
+#
+# Deploys the complete LLMOps platform as a single release by pulling in
+# sub-charts for vLLM (GPU inference), Qdrant (vector DB), and the LLM
+# Gateway (API layer with guardrails). All sub-charts live in the
+# infrastructure/helm/ directory of this repository.
+#
+# Install:
+#   helm dependency update deployment/helm/llm-stack
+#   helm install llm-stack deployment/helm/llm-stack -n llmops --create-namespace
+###############################################################################
+apiVersion: v2
+name: llm-stack
+description: >-
+  Umbrella Helm chart for the LLMOps Platform. Deploys vLLM inference,
+  Qdrant vector store, and the LLM API Gateway as a single coordinated
+  release with shared configuration.
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+
+keywords:
+  - llmops
+  - llm
+  - rag
+  - inference
+  - vllm
+  - qdrant
+  - gateway
+
+maintainers:
+  - name: LLMOps Team
+    email: llmops@company.com
+
+# ---------------------------------------------------------------------------
+# Sub-chart dependencies
+# ---------------------------------------------------------------------------
+# All three charts are sourced from the local repository. Run
+# `helm dependency update` before installing to resolve them.
+dependencies:
+  - name: vllm
+    version: "1.0.0"
+    repository: "file://../../../infrastructure/helm/vllm"
+    condition: vllm.enabled
+
+  - name: qdrant
+    version: "1.0.0"
+    repository: "file://../../../infrastructure/helm/qdrant"
+    condition: qdrant.enabled
+
+  - name: llm-gateway
+    version: "1.0.0"
+    repository: "file://../../../infrastructure/helm/llm-gateway"
+    condition: llm-gateway.enabled

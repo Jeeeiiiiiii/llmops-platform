@@ -1,0 +1,76 @@
+###############################################################################
+# PrometheusRule — Cost & Budget Alerts
+#
+# Fires when estimated LLM token costs exceed budget thresholds or when
+# token usage spikes unexpectedly relative to the 7-day moving average.
+###############################################################################
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: llmops-cost-alerts
+  namespace: llmops
+  labels:
+    app.kubernetes.io/name: llmops
+    app.kubernetes.io/component: monitoring
+    app.kubernetes.io/part-of: llmops-platform
+    prometheus: kube-prometheus
+    role: alert-rules
+spec:
+  groups:
+    - name: llmops.cost
+      rules:
+        # -----------------------------------------------------------------
+        # WARNING: Estimated daily token cost exceeds budget threshold
+        # -----------------------------------------------------------------
+        # Cost is estimated from the cost_per_request_usd histogram recorded
+        # by the gateway using configured $/token rates ($0.15/1M input,
+        # $0.60/1M output). The daily budget defaults to $100 but should be
+        # tuned per deployment.
+        - alert: LLMDailyCostExceeded
+          expr: |
+            sum(increase(cost_per_request_usd_sum{namespace="llmops"}[24h])) > 100
+          for: 10m
+          labels:
+            severity: warning
+            team: llmops
+            component: gateway
+          annotations:
+            summary: "Estimated daily LLM cost exceeds budget threshold"
+            description: >-
+              The estimated daily LLM token cost has reached ${{ $value | printf "%.2f" }}
+              (budget threshold: $100). This may indicate a traffic spike,
+              runaway automation, or a compromised API key generating
+              excessive requests. Review per-key token usage in the Token
+              Usage & Cost dashboard and consider tightening rate limits
+              for high-volume keys.
+            runbook_url: "https://wiki.internal/runbooks/llmops/cost-exceeded"
+            dashboard_url: "https://grafana.internal/d/llmops-token-cost"
+
+        # -----------------------------------------------------------------
+        # WARNING: Token usage rate >200% of 7-day average for 1 hour
+        # -----------------------------------------------------------------
+        # Detects sudden spikes in token consumption that could lead to
+        # budget overruns. Compares current 1-hour rate against the 7-day
+        # moving average.
+        - alert: LLMTokenUsageSpike
+          expr: |
+            (
+              sum(rate(token_usage_total{namespace="llmops"}[1h]))
+              /
+              sum(avg_over_time(rate(token_usage_total{namespace="llmops"}[1h])[7d:1h]))
+            ) > 2.0
+          for: 1h
+          labels:
+            severity: warning
+            team: llmops
+            component: gateway
+          annotations:
+            summary: "LLM token usage is >200% of 7-day average"
+            description: >-
+              Current token usage rate is {{ $value | printf "%.1f" }}x the
+              7-day moving average. This sustained spike (>1 hour) could
+              indicate a new high-traffic integration, a misconfigured
+              client retry loop, or abuse. Inspect per-API-key usage and
+              consider applying stricter rate limits to the offending keys.
+            runbook_url: "https://wiki.internal/runbooks/llmops/token-spike"
+            dashboard_url: "https://grafana.internal/d/llmops-token-cost"

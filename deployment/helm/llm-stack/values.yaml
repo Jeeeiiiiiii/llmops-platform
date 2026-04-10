@@ -1,0 +1,216 @@
+###############################################################################
+# LLM Stack — Combined Values
+#
+# Umbrella values file that configures all sub-charts (vllm, qdrant,
+# llm-gateway) from a single location. Override individual sub-chart
+# values by nesting under the chart name key.
+#
+# Usage:
+#   helm install llm-stack deployment/helm/llm-stack \
+#     -n llmops --create-namespace \
+#     -f deployment/helm/llm-stack/values.yaml \
+#     -f deployment/helm/llm-stack/values-production.yaml  # optional overlay
+###############################################################################
+
+# ---------------------------------------------------------------------------
+# Global settings — shared across all sub-charts
+# ---------------------------------------------------------------------------
+global:
+  # Kubernetes namespace for all resources
+  namespace: llmops
+
+  # Container image registry (prepended to all image.repository values)
+  imageRegistry: "registry.internal.company.com"
+
+  # Image pull secret for private registries
+  imagePullSecrets:
+    - name: registry-credentials
+
+  # Common labels applied to all resources
+  labels:
+    app.kubernetes.io/part-of: llmops-platform
+    app.kubernetes.io/managed-by: helm
+
+  # Prometheus scraping — enable across all services
+  monitoring:
+    enabled: true
+
+# ---------------------------------------------------------------------------
+# vLLM — GPU-accelerated LLM inference engine
+# ---------------------------------------------------------------------------
+vllm:
+  enabled: true
+
+  replicaCount: 1
+
+  image:
+    repository: vllm/vllm-openai
+    tag: "v0.4.1"
+    pullPolicy: IfNotPresent
+
+  # Model configuration
+  model:
+    name: "meta-llama/Llama-3-8B-Instruct"
+    hfTokenSecret: "hf-token"
+    hfTokenKey: "token"
+
+  # Engine tuning
+  engine:
+    tensorParallelSize: 2
+    maxModelLen: 8192
+    gpuMemoryUtilization: 0.90
+    quantization: null
+    dtype: "auto"
+    maxNumBatchedTokens: 32768
+    maxNumSeqs: 256
+    enforceEager: false
+    trustRemoteCode: false
+
+  # GPU resources
+  resources:
+    requests:
+      cpu: "4"
+      memory: "32Gi"
+      nvidia.com/gpu: "2"
+    limits:
+      cpu: "8"
+      memory: "64Gi"
+      nvidia.com/gpu: "2"
+
+  # Model weight storage
+  modelStorage:
+    enabled: true
+    storageClass: "azurefile-premium"
+    accessMode: ReadWriteMany
+    size: "100Gi"
+
+  # Autoscaling
+  autoscaling:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 4
+    metrics:
+      gpuUtilization:
+        enabled: true
+        targetValue: 75
+      queueDepth:
+        enabled: true
+        targetValue: 10
+
+  # GPU node scheduling
+  tolerations:
+    - key: "nvidia.com/gpu"
+      operator: "Exists"
+      effect: "NoSchedule"
+
+  nodeSelector:
+    accelerator: nvidia-gpu
+
+# ---------------------------------------------------------------------------
+# Qdrant — Vector database for RAG retrieval
+# ---------------------------------------------------------------------------
+qdrant:
+  enabled: true
+
+  replicaCount: 1
+
+  image:
+    repository: qdrant/qdrant
+    tag: "v1.8.4"
+
+  # Persistent storage for vector data
+  persistence:
+    enabled: true
+    storageClass: "managed-premium"
+    accessMode: ReadWriteOnce
+    size: "50Gi"
+
+  # Resource allocation
+  resources:
+    requests:
+      cpu: "1"
+      memory: "4Gi"
+    limits:
+      cpu: "4"
+      memory: "8Gi"
+
+  # Qdrant engine configuration
+  config:
+    storage:
+      storageDir: "/qdrant/storage"
+      snapshotsDir: "/qdrant/snapshots"
+      optimizers:
+        defaultSegmentNumber: 4
+        maxSegmentSize: 200000
+        memmapThreshold: 50000
+        indexingThreshold: 20000
+        flushIntervalSec: 5
+    service:
+      httpPort: 6333
+      grpcPort: 6334
+      enableTls: false
+
+  service:
+    type: ClusterIP
+    httpPort: 6333
+    grpcPort: 6334
+
+# ---------------------------------------------------------------------------
+# LLM Gateway — API gateway with auth, rate limiting, and guardrails
+# ---------------------------------------------------------------------------
+llm-gateway:
+  enabled: true
+
+  replicaCount: 2
+
+  image:
+    repository: llmops/gateway
+    tag: "1.0.0"
+
+  # Gateway application configuration
+  gateway:
+    # Upstream service URLs (resolved via Kubernetes DNS)
+    vllmUrl: "http://llm-stack-vllm:8000"
+    retrieverUrl: "http://retriever:8080"
+
+    # Authentication
+    auth:
+      enabled: true
+      apiKeySecret: "llm-gateway-api-keys"
+
+    # Rate limiting (per API key, per tier)
+    rateLimiting:
+      enabled: true
+      defaultRequestsPerMinute: 60
+      defaultTokensPerMinute: 100000
+      tiers:
+        free:
+          requestsPerMinute: 10
+          tokensPerMinute: 10000
+        standard:
+          requestsPerMinute: 60
+          tokensPerMinute: 100000
+        enterprise:
+          requestsPerMinute: 600
+          tokensPerMinute: 1000000
+
+    # Request constraints
+    maxInputTokens: 4096
+    maxOutputTokens: 4096
+    requestTimeoutSeconds: 120
+
+    # Security
+    logLevel: "INFO"
+    logPiiRedaction: true
+
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "512Mi"
+    limits:
+      cpu: "2"
+      memory: "1Gi"
+
+  service:
+    type: ClusterIP
+    port: 8080

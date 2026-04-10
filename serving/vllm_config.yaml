@@ -1,0 +1,64 @@
+###############################################################################
+# vLLM Engine Configuration
+#
+# Standalone configuration file for the vLLM inference server.
+# This is NOT a Helm values file — it is the engine-level config passed to
+# the vLLM process via CLI args or environment variables.
+#
+# Reference: https://docs.vllm.ai/en/latest/serving/engine_args.html
+###############################################################################
+
+# ---- Model ----
+model: "meta-llama/Llama-3-8B-Instruct"
+tokenizer: null                    # Use the model's default tokenizer
+revision: null                     # Specific model revision / commit hash
+download_dir: "/models/hf_cache"   # Local directory for HuggingFace cache
+trust_remote_code: false
+
+# ---- Parallelism ----
+tensor_parallel_size: 2            # Number of GPUs for tensor parallelism
+pipeline_parallel_size: 1          # Pipeline parallelism (usually 1)
+
+# ---- Context & memory ----
+max_model_len: 8192                # Maximum sequence length (tokens)
+gpu_memory_utilization: 0.9        # Fraction of GPU memory for KV cache
+swap_space: 4                      # CPU swap space per GPU (GiB)
+
+# ---- Data type ----
+dtype: "auto"                      # auto | float16 | bfloat16 | float32
+
+# ---- Quantization ----
+# Set to null for full-precision serving.
+# Supported options: "awq", "gptq", "squeezellm"
+# Example for AWQ: quantization: "awq"
+# Example for GPTQ: quantization: "gptq"
+# When using quantization, ensure the model weights are already quantized
+# (e.g., TheBloke/Llama-3-8B-Instruct-AWQ).
+quantization: null
+
+# ---- Batching ----
+max_num_seqs: 256                  # Max concurrent sequences in a batch
+max_num_batched_tokens: 32768      # Max tokens per iteration
+max_paddings: 256                  # Max padding tokens per batch
+
+# ---- Scheduling ----
+scheduler_delay_factor: 0.0        # Delay factor for request scheduling
+enable_chunked_prefill: true       # Enable chunked prefill for better TTFT
+
+# ---- Decoding ----
+guided_decoding_backend: "outlines"  # For structured output / JSON mode
+
+# ---- Server ----
+host: "0.0.0.0"
+port: 8000
+api_key: null                      # Set via VLLM_API_KEY env var in production
+
+# ---- Logging & observability ----
+disable_log_stats: false
+disable_log_requests: false
+max_log_len: 256                   # Truncate logged prompts at this length
+
+# ---- Performance tuning ----
+enforce_eager: false               # Set true to disable CUDA graphs (debug)
+enable_prefix_caching: true        # Cache common prefixes across requests
+disable_custom_all_reduce: false   # Use NCCL custom all-reduce

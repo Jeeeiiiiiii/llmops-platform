@@ -1,0 +1,68 @@
+###############################################################################
+# HPA for vLLM — Scale on custom metric: vllm_num_requests_waiting
+#
+# Requires:
+#   - Prometheus Adapter configured to expose vllm_num_requests_waiting
+#     as a custom.metrics.k8s.io resource
+#   - KEDA or prometheus-adapter for custom metric support
+#
+# Scale behavior:
+#   - Scale up:   fast (15s stabilization) to handle traffic spikes
+#   - Scale down: slow (300s stabilization) to avoid flapping
+###############################################################################
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: vllm-inference-hpa
+  namespace: llmops
+  labels:
+    app.kubernetes.io/name: vllm
+    app.kubernetes.io/component: inference
+    app.kubernetes.io/part-of: llmops-platform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: vllm-inference
+
+  minReplicas: 1
+  maxReplicas: 4
+
+  metrics:
+    # Primary metric: request queue depth
+    # Scales when average waiting requests per pod exceeds threshold
+    - type: Pods
+      pods:
+        metric:
+          name: vllm_num_requests_waiting
+        target:
+          type: AverageValue
+          averageValue: "10"
+
+    # Secondary metric: GPU utilization (from DCGM exporter)
+    - type: Pods
+      pods:
+        metric:
+          name: DCGM_FI_DEV_GPU_UTIL
+        target:
+          type: AverageValue
+          averageValue: "75"
+
+  behavior:
+    # Scale UP quickly to handle request spikes
+    scaleUp:
+      stabilizationWindowSeconds: 15
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+      selectPolicy: Max
+
+    # Scale DOWN slowly to avoid premature scale-in
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 300
+      selectPolicy: Min

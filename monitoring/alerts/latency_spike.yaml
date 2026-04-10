@@ -1,0 +1,103 @@
+###############################################################################
+# PrometheusRule — Latency Spike Alerts
+#
+# Fires when LLM inference latency or queue depth exceeds safe thresholds.
+# Targets the llmops namespace and integrates with Alertmanager for routing
+# to PagerDuty (critical) or Slack (warning).
+###############################################################################
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: llmops-latency-alerts
+  namespace: llmops
+  labels:
+    app.kubernetes.io/name: llmops
+    app.kubernetes.io/component: monitoring
+    app.kubernetes.io/part-of: llmops-platform
+    # Label selector used by Prometheus Operator to discover rules
+    prometheus: kube-prometheus
+    role: alert-rules
+spec:
+  groups:
+    - name: llmops.latency
+      # Evaluation interval inherited from Prometheus global config (default 30s)
+      rules:
+        # -----------------------------------------------------------------
+        # CRITICAL: Time-to-first-token p95 exceeds 500ms for 5 minutes
+        # -----------------------------------------------------------------
+        # High TTFT means the prefill phase is bottlenecked, usually due to
+        # GPU memory pressure, excessive context length, or insufficient
+        # tensor-parallel replicas.
+        - alert: LLMTimeToFirstTokenHigh
+          expr: |
+            histogram_quantile(
+              0.95,
+              sum(rate(vllm_time_to_first_token_seconds_bucket{namespace="llmops"}[5m])) by (le)
+            ) > 0.5
+          for: 5m
+          labels:
+            severity: critical
+            team: llmops
+            component: vllm
+          annotations:
+            summary: "LLM time-to-first-token p95 exceeds 500ms"
+            description: >-
+              The 95th percentile time-to-first-token has been above 500ms for
+              the last 5 minutes (current value: {{ $value | humanizeDuration }}).
+              This typically indicates GPU saturation, long prefill sequences, or
+              insufficient vLLM replicas. Check KV cache utilization and consider
+              scaling up GPU nodes or reducing max_model_len.
+            runbook_url: "https://wiki.internal/runbooks/llmops/ttft-high"
+            dashboard_url: "https://grafana.internal/d/llmops-latency"
+
+        # -----------------------------------------------------------------
+        # WARNING: Total generation p95 exceeds 5 seconds for 5 minutes
+        # -----------------------------------------------------------------
+        # End-to-end latency covers prefill + decode + network. Sustained high
+        # values degrade user experience and may indicate decode bottleneck.
+        - alert: LLMGenerationSlow
+          expr: |
+            histogram_quantile(
+              0.95,
+              sum(rate(chat_latency_seconds_bucket{namespace="llmops"}[5m])) by (le)
+            ) > 5
+          for: 5m
+          labels:
+            severity: warning
+            team: llmops
+            component: gateway
+          annotations:
+            summary: "LLM end-to-end generation p95 exceeds 5 seconds"
+            description: >-
+              The 95th percentile total generation latency has been above 5
+              seconds for the last 5 minutes (current value:
+              {{ $value | humanizeDuration }}). Review the retriever latency,
+              prompt template length, and vLLM decode throughput. Consider
+              reducing max_tokens or enabling chunked prefill.
+            runbook_url: "https://wiki.internal/runbooks/llmops/generation-slow"
+            dashboard_url: "https://grafana.internal/d/llmops-latency"
+
+        # -----------------------------------------------------------------
+        # WARNING: Queue depth exceeds 50 pending requests for 3 minutes
+        # -----------------------------------------------------------------
+        # A sustained queue indicates that incoming request rate exceeds
+        # serving capacity. HPA should be scaling, but this fires as a
+        # heads-up while scaling is in progress.
+        - alert: LLMQueueDepthHigh
+          expr: |
+            sum(vllm_num_requests_waiting{namespace="llmops"}) > 50
+          for: 3m
+          labels:
+            severity: warning
+            team: llmops
+            component: vllm
+          annotations:
+            summary: "LLM request queue depth exceeds 50"
+            description: >-
+              There are currently {{ $value }} requests waiting in the vLLM
+              scheduler queue (threshold: 50). This has persisted for over 3
+              minutes. Verify that the HPA is scaling up and that GPU node
+              pool has capacity. Consider increasing maxReplicas or adding
+              GPU nodes.
+            runbook_url: "https://wiki.internal/runbooks/llmops/queue-depth"
+            dashboard_url: "https://grafana.internal/d/llmops-latency"
