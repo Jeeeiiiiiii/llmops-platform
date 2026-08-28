@@ -1,0 +1,192 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "RAG Ingestion Pipeline",
+    "subtitle": "rag_pipeline/ingestion - Argo DAG from documents to searchable vectors",
+    "output": "llmops-ingestion.html",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1080,
+      620
+    ],
+    "views": [
+      {
+        "id": "offline",
+        "label": "Offline ingestion",
+        "focus": [
+          "docs",
+          "loader",
+          "chunker",
+          "embedder",
+          "qdrant"
+        ],
+        "note": "A three-step Argo DAG: load-documents, chunk-documents, embed-and-upload."
+      },
+      {
+        "id": "online",
+        "label": "Where it is consumed",
+        "focus": [
+          "qdrant",
+          "retriever",
+          "gateway"
+        ],
+        "note": "The same MiniLM model encodes the query at read time as encoded the chunks at write time."
+      }
+    ]
+  },
+  "stages": [
+    {
+      "label": "Source"
+    },
+    {
+      "label": "Load"
+    },
+    {
+      "label": "Chunk"
+    },
+    {
+      "label": "Embed"
+    },
+    {
+      "label": "Store and serve"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "docs",
+      "type": "external",
+      "label": "Documents",
+      "sublabel": "PDF, HTML, MD",
+      "stage": 0,
+      "row": 0,
+      "width": 128
+    },
+    {
+      "id": "loader",
+      "type": "backend",
+      "label": "Loader",
+      "sublabel": "hash + metadata",
+      "stage": 1,
+      "row": 0,
+      "width": 128
+    },
+    {
+      "id": "chunker",
+      "type": "backend",
+      "label": "Chunker",
+      "sublabel": "recursive split",
+      "stage": 2,
+      "row": 0,
+      "width": 128
+    },
+    {
+      "id": "embedder",
+      "type": "backend",
+      "label": "Embedder",
+      "sublabel": "all-MiniLM-L6-v2",
+      "stage": 3,
+      "row": 0,
+      "width": 128
+    },
+    {
+      "id": "qdrant",
+      "type": "database",
+      "label": "Qdrant",
+      "sublabel": "documents",
+      "stage": 4,
+      "row": 0,
+      "width": 128
+    },
+    {
+      "id": "retriever",
+      "type": "backend",
+      "label": "Retriever",
+      "sublabel": "same encoder",
+      "stage": 4,
+      "row": 1,
+      "width": 128
+    },
+    {
+      "id": "gateway",
+      "type": "frontend",
+      "label": "Gateway",
+      "sublabel": "POST /chat",
+      "stage": 4,
+      "row": 2,
+      "width": 128
+    }
+  ],
+  "flows": [
+    {
+      "id": "docs-loader",
+      "from": "docs",
+      "to": "loader",
+      "label": "raw files",
+      "variant": "emphasis"
+    },
+    {
+      "id": "loader-chunker",
+      "from": "loader",
+      "to": "chunker",
+      "label": "documents",
+      "variant": "emphasis"
+    },
+    {
+      "id": "chunker-embedder",
+      "from": "chunker",
+      "to": "embedder",
+      "label": "chunks",
+      "variant": "emphasis"
+    },
+    {
+      "id": "embedder-qdrant",
+      "from": "embedder",
+      "to": "qdrant",
+      "label": "vectors",
+      "classification": "batch upsert",
+      "variant": "emphasis"
+    },
+    {
+      "id": "qdrant-retriever",
+      "from": "qdrant",
+      "to": "retriever",
+      "label": "top-k matches"
+    },
+    {
+      "id": "retriever-gateway",
+      "from": "retriever",
+      "to": "gateway",
+      "label": "context snippets"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Three Argo steps",
+      "items": [
+        "load-documents, then chunk-documents, then embed-and-upload",
+        "Steps hand off through files on a shared pipeline workspace volume",
+        "chunk_size, chunk_overlap and batch size are workflow parameters"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "One embedding model, two sides",
+      "items": [
+        "all-MiniLM-L6-v2 encodes chunks at ingest and queries at read time",
+        "Changing the model requires re-embedding the whole collection",
+        "The retriever loads its own copy of the encoder at startup"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Retrieval defaults",
+      "items": [
+        "DEFAULT_TOP_K is 5 and DEFAULT_THRESHOLD is 0.7",
+        "The gateway passes top_k per request but never a threshold",
+        "No context found is a valid outcome; the prompt says so and continues"
+      ]
+    }
+  ]
+}

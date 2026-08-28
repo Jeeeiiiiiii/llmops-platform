@@ -1,0 +1,283 @@
+{
+  "schema_version": 1,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "LLM Gateway Request Flow",
+    "subtitle": "The eight steps of POST /chat in gateway/app.py",
+    "output": "llmops-request.html",
+    "animation": "trace",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "guarded",
+        "label": "Guardrail stages",
+        "focus": [
+          "validate",
+          "filter",
+          "redact"
+        ],
+        "note": "Input is validated before retrieval; output is filtered after generation; PII redaction touches logs only."
+      },
+      {
+        "id": "rag",
+        "label": "Retrieval and prompt",
+        "focus": [
+          "retrieve",
+          "render"
+        ],
+        "note": "Retrieved snippets are joined with separators and rendered into a Jinja2 template with the user message."
+      },
+      {
+        "id": "failure",
+        "label": "Failure modes",
+        "focus": [
+          "ratelimit",
+          "vllm",
+          "respond"
+        ],
+        "note": "429 on rate limit, 502 on vLLM error, 504 on timeout; a blocked output is replaced, not rejected."
+      }
+    ]
+  },
+  "lanes": [
+    {
+      "id": "gateway",
+      "label": "Gateway entry"
+    },
+    {
+      "id": "guardrails",
+      "label": "Input guardrail"
+    },
+    {
+      "id": "rag",
+      "label": "RAG"
+    },
+    {
+      "id": "llm",
+      "label": "Generation"
+    },
+    {
+      "id": "post",
+      "label": "Output guardrails"
+    },
+    {
+      "id": "response",
+      "label": "Response"
+    }
+  ],
+  "phases": [
+    {
+      "id": "admit",
+      "label": "Admit",
+      "fromCol": 0,
+      "toCol": 1,
+      "variant": "emphasis"
+    },
+    {
+      "id": "augment",
+      "label": "Augment",
+      "fromCol": 2,
+      "toCol": 3
+    },
+    {
+      "id": "generate",
+      "label": "Generate and filter",
+      "fromCol": 4,
+      "toCol": 5,
+      "variant": "dashed"
+    }
+  ],
+  "mainPath": [
+    "ratelimit",
+    "validate",
+    "retrieve",
+    "render",
+    "vllm"
+  ],
+  "nodes": [
+    {
+      "id": "ratelimit",
+      "lane": "gateway",
+      "col": 0,
+      "type": "security",
+      "label": "Rate limit",
+      "sublabel": "60 rpm per key",
+      "tag": "429 on breach"
+    },
+    {
+      "id": "validate",
+      "lane": "guardrails",
+      "col": 1,
+      "type": "security",
+      "label": "Validate input",
+      "sublabel": "15 injection regexes",
+      "tag": "max 4096 chars",
+      "width": 118
+    },
+    {
+      "id": "retrieve",
+      "lane": "rag",
+      "col": 2,
+      "type": "backend",
+      "label": "Retrieve",
+      "sublabel": "top_k from Qdrant"
+    },
+    {
+      "id": "render",
+      "lane": "rag",
+      "col": 3,
+      "type": "backend",
+      "label": "Render prompt",
+      "sublabel": "temp + max_tokens",
+      "width": 110
+    },
+    {
+      "id": "vllm",
+      "lane": "llm",
+      "col": 4,
+      "type": "cloud",
+      "label": "Call vLLM",
+      "sublabel": "chat completions",
+      "tag": "502 / 504"
+    },
+    {
+      "id": "filter",
+      "lane": "post",
+      "col": 4,
+      "type": "security",
+      "label": "Filter output",
+      "sublabel": "7 toxic patterns",
+      "width": 100,
+      "tag": "hedging > 50%"
+    },
+    {
+      "id": "redact",
+      "lane": "post",
+      "col": 5,
+      "type": "security",
+      "label": "Redact logs",
+      "sublabel": "5 PII types",
+      "tag": "logs only"
+    },
+    {
+      "id": "respond",
+      "lane": "response",
+      "col": 5,
+      "type": "frontend",
+      "label": "Respond",
+      "sublabel": "sources + tokens"
+    }
+  ],
+  "edges": [
+    {
+      "id": "rl-validate",
+      "from": "ratelimit",
+      "to": "validate",
+      "route": "drop",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "validate-retrieve",
+      "from": "validate",
+      "to": "retrieve",
+      "route": "drop",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "retrieve-render",
+      "from": "retrieve",
+      "to": "render",
+      "variant": "emphasis"
+    },
+    {
+      "id": "render-vllm",
+      "from": "render",
+      "to": "vllm",
+      "variant": "emphasis",
+      "route": "drop",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "vllm-filter",
+      "from": "vllm",
+      "to": "filter",
+      "variant": "security",
+      "route": "drop",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "filter-redact",
+      "from": "filter",
+      "to": "redact"
+    },
+    {
+      "id": "redact-respond",
+      "from": "redact",
+      "to": "respond",
+      "variant": "emphasis",
+      "route": "drop",
+      "fromSide": "bottom",
+      "toSide": "top"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "The eight steps",
+      "items": [
+        "Rate limit, validate, retrieve, render, generate, filter, log, respond",
+        "Retrieval failure is swallowed: the prompt says no relevant context found",
+        "A blocked output is replaced with filtered text, still returned as 200"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Prompt templates",
+      "items": [
+        "customer_support: temperature 0.3, max_tokens 1024",
+        "product_qa: temperature 0.2, max_tokens 2048",
+        "Each declares 6-7 numbered system-prompt rules plus a Jinja2 body"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "PII never reaches the response",
+      "items": [
+        "Only redact_before_logging is called, on the log strings",
+        "redact_before_response exists in pii_redactor.py and is never imported",
+        "PII the model emits is returned to the caller unredacted"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Streaming skips two guardrails",
+      "items": [
+        "/chat/stream rate limits and validates input, then streams raw",
+        "No filter_output and no redaction run on the streamed tokens",
+        "Token, cost and latency metrics are not recorded for streamed calls"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "PII detection",
+      "items": [
+        "Five types: email, SSN, credit card, phone, IP address",
+        "Six regexes in total; IP_ADDRESS has a v4 and a v6 pattern",
+        "Regex only, no NER model anywhere in the path"
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Generation params dropped",
+      "items": [
+        "Templates set top_p, frequency_penalty and presence_penalty",
+        "_call_vllm sends only model, messages, temperature, max_tokens",
+        "Three of five tuning knobs never reach vLLM"
+      ]
+    }
+  ]
+}

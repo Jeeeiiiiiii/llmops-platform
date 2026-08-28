@@ -1,0 +1,321 @@
+{
+  "schema_version": 1,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "LLMOps Deploy Pipeline",
+    "subtitle": "deployment/Jenkinsfile - eight stages, the last three gated on prompt changes",
+    "output": "llmops-cicd.html",
+    "animation": "trace",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "build",
+        "label": "Build and deploy",
+        "focus": [
+          "build_gw",
+          "build_rt",
+          "push",
+          "deploy"
+        ],
+        "note": "Two images share one GIT_COMMIT tag, then the umbrella chart resolves three local sub-charts."
+      },
+      {
+        "id": "quality",
+        "label": "Quality gate",
+        "focus": [
+          "deploy",
+          "eval"
+        ],
+        "note": "20 golden Q&A run against staging; the build fails only if a baseline file exists to compare against."
+      },
+      {
+        "id": "canary",
+        "label": "Prompt canary",
+        "focus": [
+          "canary",
+          "monitor",
+          "rollout"
+        ],
+        "note": "A real Istio 90/10 split, monitored for 10 minutes, with automatic rollback above 5% error rate."
+      }
+    ]
+  },
+  "lanes": [
+    {
+      "id": "pr",
+      "label": "PR pipeline (Jenkinsfile-eval)"
+    },
+    {
+      "id": "build",
+      "label": "Image build"
+    },
+    {
+      "id": "registry",
+      "label": "Registry and deploy"
+    },
+    {
+      "id": "quality",
+      "label": "Quality gate"
+    },
+    {
+      "id": "canary",
+      "label": "Prompt canary (changeset gated)"
+    },
+    {
+      "id": "rollback",
+      "label": "Auto rollback",
+      "variant": "exception"
+    }
+  ],
+  "phases": [
+    {
+      "id": "package",
+      "label": "Package",
+      "fromCol": 0,
+      "toCol": 1,
+      "variant": "emphasis"
+    },
+    {
+      "id": "ship",
+      "label": "Ship",
+      "fromCol": 2,
+      "toCol": 3
+    },
+    {
+      "id": "promote",
+      "label": "Promote",
+      "fromCol": 4,
+      "toCol": 5,
+      "variant": "dashed"
+    }
+  ],
+  "groups": [
+    {
+      "id": "prompt_only",
+      "label": "only when prompt_templates change",
+      "lane": "canary",
+      "fromCol": 3,
+      "toCol": 5,
+      "variant": "dashed"
+    }
+  ],
+  "mainPath": [
+    "build_gw",
+    "build_rt",
+    "push",
+    "deploy",
+    "eval"
+  ],
+  "nodes": [
+    {
+      "id": "pr_eval",
+      "lane": "pr",
+      "col": 0,
+      "type": "security",
+      "label": "PR eval",
+      "sublabel": "/run-eval on PR",
+      "tag": "posts PR comment",
+      "width": 92
+    },
+    {
+      "id": "build_gw",
+      "lane": "build",
+      "col": 0,
+      "type": "cloud",
+      "label": "Gateway img",
+      "sublabel": "docker",
+      "width": 92
+    },
+    {
+      "id": "build_rt",
+      "lane": "build",
+      "col": 1,
+      "type": "cloud",
+      "label": "Retriever img",
+      "sublabel": "docker",
+      "width": 112
+    },
+    {
+      "id": "push",
+      "lane": "registry",
+      "col": 2,
+      "type": "cloud",
+      "label": "Push",
+      "sublabel": "GIT_COMMIT[0:8]"
+    },
+    {
+      "id": "deploy",
+      "lane": "registry",
+      "col": 3,
+      "type": "cloud",
+      "label": "Deploy Stack",
+      "sublabel": "umbrella chart",
+      "tag": "3 sub-charts",
+      "width": 110
+    },
+    {
+      "id": "eval",
+      "lane": "quality",
+      "col": 4,
+      "type": "security",
+      "label": "Run Eval",
+      "sublabel": "20 golden Q&A",
+      "tag": "no baseline yet"
+    },
+    {
+      "id": "canary",
+      "lane": "canary",
+      "col": 3,
+      "type": "cloud",
+      "label": "Apply canary",
+      "sublabel": "Istio 90/10",
+      "width": 110
+    },
+    {
+      "id": "monitor",
+      "lane": "canary",
+      "col": 5,
+      "type": "security",
+      "label": "Monitor 10 min",
+      "sublabel": "canary error rate",
+      "width": 108
+    },
+    {
+      "id": "rollout",
+      "lane": "quality",
+      "col": 5,
+      "type": "cloud",
+      "label": "Full rollout",
+      "sublabel": "set env on stable"
+    },
+    {
+      "id": "undo",
+      "lane": "rollback",
+      "col": 5,
+      "type": "security",
+      "label": "Delete VS",
+      "sublabel": "fail the build"
+    }
+  ],
+  "edges": [
+    {
+      "id": "preval-build",
+      "from": "pr_eval",
+      "to": "build_gw",
+      "variant": "dashed",
+      "route": "drop",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "gw-rt",
+      "from": "build_gw",
+      "to": "build_rt"
+    },
+    {
+      "id": "rt-push",
+      "from": "build_rt",
+      "to": "push",
+      "variant": "emphasis",
+      "route": "drop",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "push-deploy",
+      "from": "push",
+      "to": "deploy",
+      "variant": "emphasis"
+    },
+    {
+      "id": "deploy-eval",
+      "from": "deploy",
+      "to": "eval",
+      "variant": "security",
+      "route": "drop",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "deploy-canary",
+      "from": "deploy",
+      "to": "canary",
+      "variant": "dashed",
+      "route": "drop",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "canary-monitor",
+      "from": "canary",
+      "to": "monitor",
+      "variant": "emphasis"
+    },
+    {
+      "id": "monitor-rollout",
+      "from": "monitor",
+      "to": "rollout",
+      "variant": "emphasis",
+      "route": "drop",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "monitor-undo",
+      "from": "monitor",
+      "to": "undo",
+      "role": "error",
+      "variant": "security",
+      "route": "drop",
+      "fromSide": "bottom",
+      "toSide": "top"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Umbrella chart",
+      "items": [
+        "llm-stack has no templates of its own, only three file:// dependencies",
+        "helm dependency update resolves vllm, qdrant and llm-gateway",
+        "Only llm-gateway.image.tag is overridden; retriever keeps its chart default"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Real routing, inert gate",
+      "items": [
+        "The Istio 90/10 DestinationRule and VirtualService are genuine",
+        "But Monitor queries request_errors_total{prompt_version=\"v2\"}",
+        "No metric carries a prompt_version label, so the rate reads 0 and always passes"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "The eval gate is inert",
+      "items": [
+        "Jenkins passes --baseline evaluation/baseline.json",
+        "That file is not in the repository, so comparison is skipped",
+        "regression_detected stays false and the gate cannot fail"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Gating by changeset",
+      "items": [
+        "Canary, Monitor and Full Rollout need gateway/prompt_templates/** to change",
+        "A pure code change deploys straight from Deploy Stack with no canary",
+        "Only prompt edits get progressive delivery"
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Two pipelines, one dataset",
+      "items": [
+        "Jenkinsfile-eval runs pre-merge on PRs via the /run-eval phrase",
+        "deployment/Jenkinsfile runs the same run_eval.py post-deploy",
+        "Both pass the same missing baseline.json, so neither can fail"
+      ]
+    }
+  ]
+}

@@ -44,11 +44,19 @@ spec:
               value: {{ .Values.gateway.maxOutputTokens | quote }}
             - name: REQUEST_TIMEOUT
               value: {{ .Values.gateway.requestTimeoutSeconds | quote }}
+            # app.py reads RATE_LIMIT_RPM; without it the limiter falls back
+            # to its hardcoded 60 and ignores the value set below.
+            - name: RATE_LIMIT_RPM
+              value: {{ .Values.gateway.rateLimiting.defaultRequestsPerMinute | quote }}
             {{- if .Values.gateway.auth.enabled }}
             - name: AUTH_ENABLED
               value: "true"
             - name: API_KEY_SECRET_NAME
               value: {{ .Values.gateway.auth.apiKeySecret | quote }}
+            # app.py reads API_KEYS_FILE, not API_KEY_SECRET_NAME. Without it
+            # no keys load and verify_api_key admits every caller as anonymous.
+            - name: API_KEYS_FILE
+              value: "/app/secrets/{{ .Values.gateway.auth.apiKeyFileName }}"
             {{- end }}
           ports:
             - name: http

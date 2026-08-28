@@ -1,0 +1,366 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "LLMOps Platform Runtime",
+    "subtitle": "Gateway, RAG retrieval and vLLM as gateway/app.py actually wires them",
+    "output": "llmops-runtime.html",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1120,
+      720
+    ],
+    "views": [
+      {
+        "id": "request",
+        "label": "Request path",
+        "focus": [
+          "client",
+          "gateway",
+          "retriever",
+          "qdrant",
+          "vllm"
+        ],
+        "note": "The gateway orchestrates everything; retriever and vLLM never talk to each other."
+      },
+      {
+        "id": "guardrails",
+        "label": "Guardrails",
+        "focus": [
+          "input_val",
+          "output_filter",
+          "gateway"
+        ],
+        "note": "Both guardrails are in-process Python imports, not services, and use their own baked-in defaults."
+      },
+      {
+        "id": "gpu",
+        "label": "GPU tier",
+        "focus": [
+          "vllm",
+          "gpupool"
+        ],
+        "note": "vLLM requests 2 GPUs with tensor parallelism on an autoscaling node pool that scales to zero."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "input_val",
+      "type": "security",
+      "label": "Input validator",
+      "sublabel": "injection, length",
+      "tag": "in-process",
+      "pos": [
+        560,
+        70
+      ],
+      "size": [
+        170,
+        58
+      ]
+    },
+    {
+      "id": "templates",
+      "type": "external",
+      "label": "Prompt templates",
+      "sublabel": "2 YAML files",
+      "pos": [
+        300,
+        70
+      ],
+      "size": [
+        170,
+        58
+      ]
+    },
+    {
+      "id": "client",
+      "type": "external",
+      "label": "API client",
+      "sublabel": "X-API-Key header",
+      "pos": [
+        40,
+        230
+      ],
+      "size": [
+        170,
+        58
+      ]
+    },
+    {
+      "id": "gateway",
+      "type": "backend",
+      "label": "LLM Gateway",
+      "sublabel": "FastAPI :8080",
+      "tag": "orchestrator",
+      "pos": [
+        300,
+        230
+      ],
+      "size": [
+        170,
+        58
+      ]
+    },
+    {
+      "id": "retriever",
+      "type": "backend",
+      "label": "Retriever",
+      "sublabel": "FastAPI :8080",
+      "pos": [
+        560,
+        230
+      ],
+      "size": [
+        170,
+        58
+      ]
+    },
+    {
+      "id": "qdrant",
+      "type": "database",
+      "label": "Qdrant",
+      "sublabel": "50Gi StatefulSet",
+      "pos": [
+        820,
+        230
+      ],
+      "size": [
+        170,
+        58
+      ]
+    },
+    {
+      "id": "prometheus",
+      "type": "backend",
+      "label": "Prometheus",
+      "sublabel": "6 metric series",
+      "pos": [
+        40,
+        390
+      ],
+      "size": [
+        170,
+        58
+      ]
+    },
+    {
+      "id": "output_filter",
+      "type": "security",
+      "label": "Output filter",
+      "sublabel": "toxic, hallucination",
+      "tag": "in-process",
+      "pos": [
+        300,
+        390
+      ],
+      "size": [
+        170,
+        58
+      ]
+    },
+    {
+      "id": "vllm",
+      "type": "cloud",
+      "label": "vLLM",
+      "sublabel": "Llama 3 8B Instruct",
+      "tag": "tensor parallel 2",
+      "pos": [
+        560,
+        390
+      ],
+      "size": [
+        170,
+        58
+      ]
+    },
+    {
+      "id": "gpupool",
+      "type": "cloud",
+      "label": "GPU node pool",
+      "sublabel": "AKS, scales to zero",
+      "pos": [
+        820,
+        390
+      ],
+      "size": [
+        170,
+        58
+      ]
+    },
+    {
+      "id": "grafana",
+      "type": "frontend",
+      "label": "Grafana",
+      "sublabel": "4 dashboards",
+      "pos": [
+        40,
+        550
+      ],
+      "size": [
+        170,
+        58
+      ]
+    },
+    {
+      "id": "serving_dead",
+      "type": "external",
+      "label": "serving/ manifests",
+      "sublabel": "applied by nothing",
+      "tag": "366 lines",
+      "pos": [
+        560,
+        550
+      ],
+      "size": [
+        170,
+        58
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "GPU tier",
+      "wraps": [
+        "vllm",
+        "gpupool"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "Observability",
+      "wraps": [
+        "prometheus",
+        "grafana"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "Unreferenced",
+      "wraps": [
+        "serving_dead"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "client-gw",
+      "from": "client",
+      "to": "gateway",
+      "label": "POST /chat",
+      "variant": "emphasis"
+    },
+    {
+      "id": "gw-input",
+      "from": "gateway",
+      "to": "input_val",
+      "label": "validate",
+      "variant": "security",
+      "fromSide": "top",
+      "toSide": "left"
+    },
+    {
+      "id": "gw-retriever",
+      "from": "gateway",
+      "to": "retriever",
+      "label": "/retrieve",
+      "variant": "emphasis"
+    },
+    {
+      "id": "retriever-qdrant",
+      "from": "retriever",
+      "to": "qdrant",
+      "label": "top-k search"
+    },
+    {
+      "id": "templates-gw",
+      "from": "templates",
+      "to": "gateway",
+      "label": "Jinja2",
+      "labelDy": 24
+    },
+    {
+      "id": "gw-vllm",
+      "from": "gateway",
+      "to": "vllm",
+      "label": "completions",
+      "variant": "emphasis"
+    },
+    {
+      "id": "gw-output",
+      "from": "gateway",
+      "to": "output_filter",
+      "label": "filter",
+      "variant": "security",
+      "labelDy": 24
+    },
+    {
+      "id": "vllm-gpu",
+      "from": "vllm",
+      "to": "gpupool",
+      "label": "2 GPUs",
+      "variant": "dashed"
+    },
+    {
+      "id": "gw-prom",
+      "from": "gateway",
+      "to": "prometheus",
+      "label": "/metrics"
+    },
+    {
+      "id": "prom-grafana",
+      "from": "prometheus",
+      "to": "grafana",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "One orchestrator",
+      "items": [
+        "The gateway calls retriever and vLLM; they never call each other",
+        "Retriever embeds the query itself with the same MiniLM model",
+        "Cost is estimated in-process at $0.15 and $0.60 per million tokens"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Guardrails are libraries",
+      "items": [
+        "input_validator and output_filter are imported, not deployed",
+        "Both are called with no config, so DEFAULT_CONFIG in the module wins",
+        "The chart's guardrail settings in gateway.yaml are never read"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Authentication is open",
+      "items": [
+        "app.py reads API_KEYS_FILE; the chart sets API_KEY_SECRET_NAME",
+        "With no keys loaded, verify_api_key returns anonymous for everyone",
+        "Rate limiting then buckets all callers together under one key"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Config that does nothing",
+      "items": [
+        "gateway.yaml is mounted at /app/config but never opened",
+        "MAX_INPUT_TOKENS, REQUEST_TIMEOUT and AUTH_ENABLED are unread",
+        "RATE_LIMIT_RPM is read by the app but never set by the chart"
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Duplicate manifests",
+      "items": [
+        "serving/deployment.yaml defines a second vllm-inference Deployment",
+        "Neither Jenkinsfile nor the umbrella chart ever applies it",
+        "infrastructure/helm/vllm is what actually runs"
+      ]
+    }
+  ]
+}

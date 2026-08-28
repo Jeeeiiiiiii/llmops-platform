@@ -26,6 +26,9 @@ gateway:
     enabled: true
     # Secret containing API keys (key name -> key value)
     apiKeySecret: "llm-gateway-api-keys"
+    # Key within that secret holding the JSON key list. The secret is mounted
+    # at /app/secrets and the file must contain {"keys": ["...", "..."]}.
+    apiKeyFileName: "api-keys.json"
 
   # Rate limiting (per API key)
   rateLimiting:
